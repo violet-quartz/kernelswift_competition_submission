@@ -1,14 +1,15 @@
 # KernelSwift 算子创新大赛 — hc_split_sinkhorn（沐曦 C500）
 
-用 Triton 重写 `hc_split_sinkhorn`，在沐曦 C500 上相对赛题给出的 torch 参考实现
-取得 **14.75x** 加速，正确性通过官方 `auto_bench.py` 校验。
+用 Triton 重写 `hc_split_sinkhorn`，正确性通过官方 `auto_bench.py` 校验。
+
+以下是在沐曦 C500 和昇腾 A2 上相对赛题给出的 torch 参考实现取得的加速：
 
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 正确性 |
 |---|---|---:|---:|---:|:---:|
 | hc_split_sinkhorn | MetaX C500 | 1.6087 | 0.1091 | **14.75x** | PASS |
+| hc_split_sinkhorn | Ascend 910B3 | 2.9149 | 0.3322 | **8.78x** | PASS |
 
-
-完整测量条件、稳定性说明和耗时构成见 [results/cuda-MetaX_C500/RESULTS.md](results/cuda-MetaX_C500/RESULTS.md)。
+完整测量条件、稳定性说明和耗时构成见 [results/cuda-MetaX_C500/RESULTS.md](results/cuda-MetaX_C500/RESULTS.md) 和 [results/npu-Ascend910B3/RESULTS.md](results/npu-Ascend910B3/RESULTS.md)。
 
 ## 目录结构
 

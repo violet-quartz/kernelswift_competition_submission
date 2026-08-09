@@ -108,8 +108,6 @@ C ← C/(rowsum+eps); C ← C/(colsum+eps)      等价于     C_k = diag(u)·C�
   没有任何条件分支**，唯一的计算路径就是调用 `_hc_split_sinkhorn_kernel`
   这个 `@triton.jit` kernel。forward 里除了 3 次 `torch.empty`（分配输出）
   和 3 次 `view`（改元信息）之外，不调用任何 PyTorch 计算算子。
-- 文件顶部的 `KS_IMPL = "triton"` 标记 + `bench/run_all.py` 的
-  `uses_triton()` 静态检查（独立验证该文件确实 import 了 triton）双重确认。
 - `bench/auto_bench.py` 与官方上游**逐字一致**，未打任何补丁。
   `run.sh` 只负责拉起子进程和汇总，不介入任何计时或比对逻辑。
 

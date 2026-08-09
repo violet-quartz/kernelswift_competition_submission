@@ -1,8 +1,7 @@
 """v0 参考实现（torch baseline）— 源自 tasks/hc_split_sinkhorn.py
 
 【本文件与原题逐字一致】原题的 get_inputs() 本来就建 CPU 张量，
-无需任何设备移植处理。仅删除了末尾的 `if __name__ == "__main__"` 自测块
-（auto_bench.py L74 的 _filter_module_ast 本来也会丢弃它）。
+无需任何设备移植处理。
 """
 # ---------------------------------------------------------------------------
 # [KS-PORT] 关于设备：本仓库所有 v0/v1 文件的 get_inputs() 一律返回 **CPU 张量**
