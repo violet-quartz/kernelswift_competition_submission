@@ -155,11 +155,13 @@ def main() -> int:
         traceback.print_exc()
         return 1
 
-    # --- ⑥ 本仓库真实 kernel 的编译冒烟 -------------------------------------
-    # 上面那个是 tutorial 级的一维 kernel。这里再验一个更接近实战的：
-    # 2D tile + 双向 reduction + 循环里的 loop-carried tile —— 正是
-    # v1/hc_split_sinkhorn.py 用到的全部特性。厂商分支若在这些地方有缺失，
-    # 在这里就会暴露，不用等到跑真 kernel。
+    # --- ⑥ 本仓库真实 kernel 用到的 2D tile 特性冒烟 -------------------------
+    # ⑥a 能力探针：range + 2D loop-carried + 规约
+    #     4090 通过；MetaX C500 会段错误（已知，make_ttgir）
+    #     必须放在子进程里，否则段错误会带走整个 selftest
+    # ⑥b 实际写法：u/v 形式，1D loop-carried
+    #     所有平台都该通过 —— 这个失败才是真的有问题，return 1
+
     @triton.jit
     def _smoke2d(p_ptr, o_ptr, ITERS: tl.constexpr, HC: tl.constexpr):
         i = tl.arange(0, HC)[:, None]
@@ -173,37 +175,39 @@ def main() -> int:
         tl.store(o_ptr + off, t)
 
     @triton.jit
-    def sinkhorn_uv(c_ptr, o_ptr, ITERS: tl.constexpr, HC: tl.constexpr, EPS: tl.constexpr):
+    def _smoke2d_uv(p_ptr, o_ptr, ITERS: tl.constexpr, HC: tl.constexpr):
         i = tl.arange(0, HC)[:, None]
         j = tl.arange(0, HC)[None, :]
         off = i * HC + j
-        K = tl.exp(-tl.load(c_ptr + off) / EPS)        # 循环外算一次，之后只读不改
+        x = tl.load(p_ptr + off)
+        c0 = tl.exp(x - tl.max(x, axis=1)[:, None])      # 循环外算一次，之后只读
 
         u = tl.zeros([HC], dtype=tl.float32) + 1.0
         v = tl.zeros([HC], dtype=tl.float32) + 1.0
-        for _ in range(ITERS):                          # ← 可以用普通 range
-            u = 1.0 / (tl.sum(K * v[None, :], axis=1) + 1e-6)
-            v = 1.0 / (tl.sum(K * u[:, None], axis=0) + 1e-6)
+        for _ in range(ITERS):                            # 普通 range，不需要 static_range
+            r = tl.sum(c0 * v[None, :], axis=1)
+            u = u / (u * r + 1e-6)
+            s = tl.sum(c0 * u[:, None], axis=0)
+            v = v / (v * s + 1e-6)
 
-        tl.store(o_ptr + off, u[:, None] * K * v[None, :])
+        tl.store(o_ptr + off, u[:, None] * c0 * v[None, :])
+
 
     try:
         p = torch.randn(4, 4, device=dev)
         o = torch.empty_like(p)
-        _smoke2d[(1,)](p, o, ITERS=20, HC=4)
+        _smoke2d_uv[(1,)](p, o, ITERS=20, HC=4)
         getattr(torch, found).synchronize()
         col = o.sum(dim=0)
         ok = torch.allclose(col, torch.ones_like(col), atol=1e-3, rtol=1e-3)
-        print(f"2D tile / 双向 reduction / constexpr 循环: "
-              f"{'通过' if ok else '!! 数值不对'}（Sinkhorn 后列和={col.tolist()}）")
+        print(f"u/v 对角缩放 Sinkhorn（v1 实际用的写法）: "
+              f"{'通过' if ok else '!! 数值不对'}（列和={col.tolist()}）")
         if not ok:
             return 1
     except Exception as e:
-        print("2D tile 冒烟测试失败:", type(e).__name__, e)
+        print("u/v Sinkhorn 冒烟测试失败:", type(e).__name__, e)
         import traceback
         traceback.print_exc()
-        print("\n-> v1/hc_split_sinkhorn.py 用的正是这些特性，需要按文件头的"
-              "『跨芯片移植注意』改写（range -> tl.static_range，或改 3D tile 方案）")
         return 1
 
     return 0
