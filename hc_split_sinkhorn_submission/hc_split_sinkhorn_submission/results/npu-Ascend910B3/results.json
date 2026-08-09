@@ -1,0 +1,30 @@
+{
+  "chip": "npu-Ascend910B3",
+  "env": {
+    "python": "3.11.15",
+    "platform": "Linux-5.10.0-216.0.0.115.oe2203sp4.aarch64-aarch64-with-glibc2.35",
+    "chip": "npu:Ascend910B3",
+    "torch": "2.7.1+cpu",
+    "triton": "3.2.0"
+  },
+  "bench_args": {
+    "chip": "auto",
+    "only": null,
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01
+  },
+  "results": [
+    {
+      "name": "hc_split_sinkhorn",
+      "wall_s": 24.0,
+      "raw_output": "PASS accuracy; v0=2.914920 ms, v1=0.332170 ms, speedup=8.775x\n\nSummary: 1 passed, 0 failed, 1 total.",
+      "status": "pass",
+      "v0_ms": 2.91492,
+      "v1_ms": 0.33217,
+      "speedup": 8.775
+    }
+  ]
+}
