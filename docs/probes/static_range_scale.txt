@@ -1,0 +1,8 @@
+base) root@67135174c7d6:~/kernelswift_competition# python3 env/metax-c500/static_range_scale.py --case 16x50
+COMPILE_S=1.13 RUN_MS=0.055 COLERR=1.07e-06 ROWERR=1.07e-06
+(base) root@67135174c7d6:~/kernelswift_competition# python3 env/metax-c500/static_range_scale.py             
+   HC   ITERS 结果             编译(s)     执行(ms)  收敛误差
+------------------------------------------------------------------------
+    8      10 通过            209.73      0.030  列 1.07e-06 行 1.07e-06
+
+挺慢的

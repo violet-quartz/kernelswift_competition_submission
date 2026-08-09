@@ -1,0 +1,30 @@
+用例     结果           说明
+--------------------------------------------------------------------------
+01     通过           2D tile：广播构造下标 + load + store（无任何规约）
+02     通过           2D tile + tl.exp
+03     通过           沿 axis=1 规约，结果写成 1D（不广播回去）
+04     通过           沿 axis=0 规约（列方向，通常比 axis=1 更容易出问题）
+05     通过           axis=1 规约后 [:, None] 广播回 2D
+06     通过           axis=0 规约后 [None, :] 广播回 2D
+07     通过           range 循环，2D tile 作为 loop-carried 变量  ← 头号嫌疑
+08     通过           同上，但用 tl.static_range（完全展开，不生成 scf.for）
+09     段错误 ✗        range 循环 + 循环体内双向规约（= _smoke2d 的核心结构）
+       |   File "/opt/conda/lib/python3.10/site-packages/triton/runtime/jit.py", line 345 in <lambda>
+       |   File "/root/kernelswift_competition/env/metax_bisect.py", line 259 in run_one
+       |   File "/root/kernelswift_competition/env/metax_bisect.py", line 285 in main
+       |   File "/root/kernelswift_competition/env/metax_bisect.py", line 325 in <module>
+       | 
+       | Extension modules: numpy.core._multiarray_umath, numpy.core._multiarray_tests, numpy.linalg._umath_linalg, numpy.fft._pocketfft_internal, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._mt19937, numpy.random.mtrand, numpy.random._philox, numpy.random._pcg64, numpy.random._sfc64, numpy.random._generator, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, maca_utils (total: 25)
+10     通过           同上，改用 tl.static_range  ← 头号解决方案候选
+11     通过           tl.max(axis=1) 后广播（_smoke2d 里 softmax 那一步）
+12     段错误 ✗        完整复现 selftest 里的 _smoke2d
+       |   File "/opt/conda/lib/python3.10/site-packages/triton/runtime/jit.py", line 345 in <lambda>
+       |   File "/root/kernelswift_competition/env/metax_bisect.py", line 259 in run_one
+       |   File "/root/kernelswift_competition/env/metax_bisect.py", line 285 in main
+       |   File "/root/kernelswift_competition/env/metax_bisect.py", line 325 in <module>
+       | 
+       | Extension modules: numpy.core._multiarray_umath, numpy.core._multiarray_tests, numpy.linalg._umath_linalg, numpy.fft._pocketfft_internal, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._mt19937, numpy.random.mtrand, numpy.random._philox, numpy.random._pcg64, numpy.random._sfc64, numpy.random._generator, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, maca_utils (total: 25)
+--------------------------------------------------------------------------
+最早失败的用例: 09
+对比它和前一个通过的用例，两者的差异就是触发编译器 bug 的特性。
+若 09 失败而 10 通过 -> 换 tl.static_range 即可绕过。

@@ -1,0 +1,34 @@
+{
+  "chip": "cuda-MetaX_C500",
+  "env": {
+    "python": "3.10.10",
+    "platform": "Linux-5.15.0-58-generic-x86_64-with-glibc2.39",
+    "chip": "cuda:MetaX C500",
+    "torch": "2.8.0+metax3.3.0.2",
+    "triton": "3.0.0"
+  },
+  "bench_args": {
+    "chip": "auto",
+    "only": [
+      "hc_split_sinkhorn"
+    ],
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01
+  },
+  "results": [
+    {
+      "name": "hc_split_sinkhorn",
+      "ks_impl": "triton",
+      "imports_triton": true,
+      "wall_s": 12.6,
+      "raw_output": "PASS accuracy; v0=1.557097 ms, v1=0.108875 ms, speedup=14.302x\n\nSummary: 1 passed, 0 failed, 1 total.",
+      "status": "pass",
+      "v0_ms": 1.557097,
+      "v1_ms": 0.108875,
+      "speedup": 14.302
+    }
+  ]
+}

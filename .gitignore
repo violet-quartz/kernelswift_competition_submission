@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+venv/
+
+# Triton 编译缓存
+.triton/
+*.ttir
+*.ttgir
+*.llir
+*.ptx
+*.cubin
+
+# 环境快照是提交材料的一部分，必须入库 —— 显式反排除
+!env/*/env.lock.txt
