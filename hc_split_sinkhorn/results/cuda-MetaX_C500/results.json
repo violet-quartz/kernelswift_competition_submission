@@ -9,9 +9,7 @@
   },
   "bench_args": {
     "chip": "auto",
-    "only": [
-      "hc_split_sinkhorn"
-    ],
+    "only": null,
     "warmup": 200,
     "repeat": 500,
     "seed": 42,
@@ -21,14 +19,12 @@
   "results": [
     {
       "name": "hc_split_sinkhorn",
-      "ks_impl": "triton",
-      "imports_triton": true,
-      "wall_s": 12.6,
-      "raw_output": "PASS accuracy; v0=1.557097 ms, v1=0.108875 ms, speedup=14.302x\n\nSummary: 1 passed, 0 failed, 1 total.",
+      "wall_s": 13.6,
+      "raw_output": "PASS accuracy; v0=1.608680 ms, v1=0.109083 ms, speedup=14.747x\n\nSummary: 1 passed, 0 failed, 1 total.",
       "status": "pass",
-      "v0_ms": 1.557097,
-      "v1_ms": 0.108875,
-      "speedup": 14.302
+      "v0_ms": 1.60868,
+      "v1_ms": 0.109083,
+      "speedup": 14.747
     }
   ]
 }
