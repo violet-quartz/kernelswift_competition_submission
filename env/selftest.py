@@ -22,7 +22,9 @@ self.starting_line_number = inspect.getsourcelines(fn)[1]）。
 退出码: 0 = 全通过，1 = 任一环节失败。
 """
 import importlib
+import importlib.util
 import sys
+from pathlib import Path
 
 # 【tl 必须在模块级可见】
 # @triton.jit 编译 kernel 时，kernel 体里的自由变量（tl.arange、tl.sum ...）是通过
@@ -155,60 +157,55 @@ def main() -> int:
         traceback.print_exc()
         return 1
 
-    # --- ⑥ 本仓库真实 kernel 用到的 2D tile 特性冒烟 -------------------------
-    # ⑥a 能力探针：range + 2D loop-carried + 规约
-    #     4090 通过；MetaX C500 会段错误（已知，make_ttgir）
-    #     必须放在子进程里，否则段错误会带走整个 selftest
-    # ⑥b 实际写法：u/v 形式，1D loop-carried
-    #     所有平台都该通过 —— 这个失败才是真的有问题，return 1
+    # --- ⑥ 每个算子文件夹自己的 kernel 特性冒烟 -------------------------------
+    # import 成功、tutorial 级 kernel（步骤⑤）能跑，不代表某个算子实际用到的、
+    # 更刁钻的 Triton 特性组合在这个后端上没问题——hc_split_sinkhorn 就在沐曦上
+    # 撞过 make_ttgir 段错误（见 docs/debug-hc_split_sinkhorn.md）。但把每个
+    # 算子的探针都手写在这个文件里不 scale：以后每加一个算子就要回来改一次
+    # selftest.py，迟早漏掉，文件也会越堆越长。
+    #
+    # 改成约定优于配置，跟 bench/run_all.py 的 discover_operator_dirs() 同一套
+    # 判据：算子文件夹（同时有 v0/ 和 v1/ 子目录）下若有 selftest_probe.py，
+    # 自动发现并调用其模块级 probe(dev) -> (bool, str)。探针应该是该算子 v1
+    # kernel 实际用到的、曾经或可能有问题的 Triton 特性组合的最小复现，不是
+    # 完整跑一遍 v1.forward()（那需要 get_init_inputs/get_inputs 的完整机器，
+    # 更慢，出问题时也更难定位是哪个特性导致的）。
+    #
+    # 已知限制：探针在本进程里直接调用，某个探针如果真的段错误（不是抛异常，
+    # 是 core dumped）会带走整个 selftest，看不到它之后的探针结果。目前认为
+    # 可接受，因为能进这里的探针按约定反映的是该算子 v1 里已经验证过、实际在
+    # 用的写法（比如 hc_split_sinkhorn 的探针就是绕开段错误之后的 u/v 版本），
+    # 不是用来探索边界的对照组。如果以后哪个算子的探针本身就是想验证"这个写法
+    # 会不会崩"，应该在探针脚本内部自己拉子进程隔离，不要指望这里的调用方兜底。
+    repo_root = Path(__file__).resolve().parent.parent
+    probe_files = []
+    for p in sorted(repo_root.iterdir()):
+        if not p.is_dir() or p.name.startswith("."):
+            continue
+        if not ((p / "v0").is_dir() and (p / "v1").is_dir()):
+            continue
+        probe_path = p / "selftest_probe.py"
+        if probe_path.is_file():
+            probe_files.append((p.name, probe_path))
 
-    @triton.jit
-    def _smoke2d(p_ptr, o_ptr, ITERS: tl.constexpr, HC: tl.constexpr):
-        i = tl.arange(0, HC)[:, None]
-        j = tl.arange(0, HC)[None, :]
-        off = i * HC + j
-        t = tl.load(p_ptr + off)
-        t = tl.exp(t - tl.max(t, axis=1)[:, None])
-        for _ in range(ITERS):
-            t = t / (tl.sum(t, axis=1)[:, None] + 1e-6)
-            t = t / (tl.sum(t, axis=0)[None, :] + 1e-6)
-        tl.store(o_ptr + off, t)
+    if not probe_files:
+        print("(没有算子文件夹提供 selftest_probe.py，跳过 ⑥)")
 
-    @triton.jit
-    def _smoke2d_uv(p_ptr, o_ptr, ITERS: tl.constexpr, HC: tl.constexpr):
-        i = tl.arange(0, HC)[:, None]
-        j = tl.arange(0, HC)[None, :]
-        off = i * HC + j
-        x = tl.load(p_ptr + off)
-        c0 = tl.exp(x - tl.max(x, axis=1)[:, None])      # 循环外算一次，之后只读
-
-        u = tl.zeros([HC], dtype=tl.float32) + 1.0
-        v = tl.zeros([HC], dtype=tl.float32) + 1.0
-        for _ in range(ITERS):                            # 普通 range，不需要 static_range
-            r = tl.sum(c0 * v[None, :], axis=1)
-            u = u / (u * r + 1e-6)
-            s = tl.sum(c0 * u[:, None], axis=0)
-            v = v / (v * s + 1e-6)
-
-        tl.store(o_ptr + off, u[:, None] * c0 * v[None, :])
-
-
-    try:
-        p = torch.randn(4, 4, device=dev)
-        o = torch.empty_like(p)
-        _smoke2d_uv[(1,)](p, o, ITERS=20, HC=4)
-        getattr(torch, found).synchronize()
-        col = o.sum(dim=0)
-        ok = torch.allclose(col, torch.ones_like(col), atol=1e-3, rtol=1e-3)
-        print(f"u/v 对角缩放 Sinkhorn（v1 实际用的写法）: "
-              f"{'通过' if ok else '!! 数值不对'}（列和={col.tolist()}）")
+    for op_name, probe_path in probe_files:
+        spec = importlib.util.spec_from_file_location(f"_selftest_probe_{op_name}", probe_path)
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+            ok, detail = mod.probe(dev)
+        except Exception as e:
+            print(f"[{op_name}] 探针失败: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
+        status = "通过" if ok else "!! 数值不对"
+        print(f"[{op_name}] {probe_path.name}: {status}（{detail}）")
         if not ok:
             return 1
-    except Exception as e:
-        print("u/v Sinkhorn 冒烟测试失败:", type(e).__name__, e)
-        import traceback
-        traceback.print_exc()
-        return 1
 
     return 0
 

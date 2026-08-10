@@ -1,75 +1,90 @@
 # KernelSwift 算子创新大赛 — hc_split_sinkhorn（沐曦 C500）
 
-用 Triton 重写 `hc_split_sinkhorn`，在沐曦 C500 上相对赛题给出的 torch 参考实现
-取得 **14.30x** 加速，正确性通过官方 `auto_bench.py` 校验。
+用 Triton 重写 `hc_split_sinkhorn`，正确性通过官方 `auto_bench.py` 校验。
+
+以下是在沐曦 C500 和昇腾 A2 上相对赛题给出的 torch 参考实现取得的加速：
 
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 正确性 |
 |---|---|---:|---:|---:|:---:|
-| hc_split_sinkhorn | MetaX C500 | 1.5571 | 0.1089 | **14.30x** | PASS |
+| hc_split_sinkhorn | MetaX C500 | 1.6087 | 0.1091 | **14.75x** | PASS |
+| hc_split_sinkhorn | Ascend 910B3 | 2.9149 | 0.3322 | **8.78x** | PASS |
 
-完整测量条件、稳定性说明和耗时构成见 [results/cuda-MetaX_C500/RESULTS.md](results/cuda-MetaX_C500/RESULTS.md)。
+完整测量条件、稳定性说明和耗时构成见 [results/cuda-MetaX_C500/RESULTS.md](results/cuda-MetaX_C500/RESULTS.md) 和 [results/npu-Ascend910B3/RESULTS.md](results/npu-Ascend910B3/RESULTS.md)。
 
 ## 目录结构
 
+`bench/`、`env/`、`run.sh` 是**所有算子共用**的基础设施，放在仓库根目录，
+不属于本文件夹；每个算子一个文件夹（本文件夹就是 `hc_split_sinkhorn` 这一
+题），内部只放这道题自己的东西。仓库里如果还有别的算子文件夹，这里不重复
+画出——结构跟本文件夹是同一个模式，各自有自己的 README：
+
 ```
-.
-├── run.sh                        一键运行脚本（对拍 + 计时 + 产出结果）
-├── tasks/hc_split_sinkhorn.py    赛题原始文件（未修改，供对照）
-├── v0/hc_split_sinkhorn.py       torch 参考实现（Model）—— 加速比的基准
-├── v1/hc_split_sinkhorn.py       Triton 优化实现（ModelNew）—— 参赛作品
+仓库根目录/
+├── run.sh                            一键运行脚本（对拍 + 计时 + 产出结果，所有算子共用）
 ├── bench/
-│   ├── auto_bench.py             官方评测脚本（与上游逐字一致，未做任何修改）
-│   ├── run_all.py                批量拉起 auto_bench + 汇总结果
-│   ├── count_ops.py              统计 v0 每次 forward 的 aten 算子数
-│   ├── profile_overhead.py       拆解 v1 每次 forward 的固定开销构成
-│   └── tasks.json                题目清单
+│   ├── auto_bench.py                 官方评测脚本（与上游逐字一致，未做任何修改）
+│   └── run_all.py                    批量拉起 auto_bench + 汇总结果，自动发现每个算子文件夹
 ├── env/
-│   ├── capture.sh                环境快照
-│   ├── selftest.py               后端连通性 + Triton 工具链自检
-│   └── metax-c500/               沐曦环境配置
-├── docs/
-│   ├── debug-hc_split_sinkhorn.md   调试记录（编译器 bug 定位与解决全过程）
-│   └── probes/                      支撑上述记录的探针脚本和原始输出
-└── results/cuda-MetaX_C500/      性能测试结果
+│   ├── capture.sh                    环境快照
+│   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
+│   ├── metax-c500/                   沐曦环境配置
+│   └── ascend-910b3/                 昇腾环境配置
+└── hc_split_sinkhorn/                本文件夹
+    ├── README.md                     本文件
+    ├── selftest_probe.py             v1 kernel 特性冒烟探针，供 env/selftest.py 自动发现
+    ├── tasks/
+    │   ├── hc_split_sinkhorn.py      赛题原始文件（未修改，供对照）
+    │   └── tasks.json                本算子的题目清单
+    ├── v0/hc_split_sinkhorn.py       torch 参考实现（Model）—— 加速比的基准
+    ├── v1/hc_split_sinkhorn.py       Triton 优化实现（ModelNew）—— 参赛作品
+    ├── scratch/                      torch.compile 对照实验（Inductor 生成代码 dump，判断编译器融合程度用）
+    └── results/                      性能测试结果
 ```
+
+`bench/run_all.py` 靠"同时有 `v0/` 和 `v1/` 子目录"自动识别算子文件夹，
+不需要在别处额外注册；`env/selftest.py` 的探针发现用的是同一套判据
+（见下面「环境自检」一节）。
 
 ## 快速开始
 
+**以下命令都在仓库根目录下执行**（`bench/`、`env/`、`run.sh` 都在那里，不在本文件夹里）：
+
 ```bash
 # 1. 环境准备（首次上机）
+# 以沐曦为例，若为昇腾，则是 bash env/ascend-910b3/setup.sh
 bash env/metax-c500/setup.sh
 
-# 2. 跑对拍 + 计时
-bash run.sh
+# 2. 跑对拍 + 计时（--only 按 task 名过滤，本算子叫 hc_split_sinkhorn）
+bash run.sh --only hc_split_sinkhorn
 ```
 
 `run.sh` 会为每个 task 拉起一个独立的 `auto_bench.py` 子进程，
-结果写入 `results/<chip>/{RESULTS.md,results.json}`。
+结果写入本文件夹下的 `results/<chip>/{RESULTS.md,results.json}`。
 
 ## 优化思路
 
-### 判断：这是 launch-bound，不是 compute-bound
+### 判断：这是 memory-bound，不是 compute-bound
 
-`auto_bench.py` 的计时方式（L429-445）是**每次 forward 单独同步计时**：
+hc_split_sinkhorn 中的计算主要是 sigmoid、exp、逐元素乘加，外加 20 轮 row-sum/col-sum 归一化，不含任何 matmul/attention 结构，应该是 memory-bound。
 
-```python
-for _ in range(repeat):
-    start = time.perf_counter()
-    model.forward(*inputs)
-    sync_devices()                 # 每次都同步
-    samples.append(...)            # 取 median
-```
+我们也可以粗略算一下算术强度：
+- 加/减/乘/除/比较，各记 1 flop
+- exp（因此 sigmoid）这类超越函数不是单周期指令，硬件走 SFU 查表+多项式逼近，按经验取 exp ≈ 8 flops 的等效代价
 
-而这题的数据极小：`comb` 只有 `[16,4,4]` = 256 个 float，`pre`/`post` 各 `[16,4]`。
-`bench/count_ops.py` 用 `TorchDispatchMode` 实测出 v0 每次 forward 派发
-**136 个 aten 算子**（20 轮 Sinkhorn，每轮 2 次除法 + 2 次求和，加上前面的
-sigmoid / exp / softmax）。
+| | 数值 |
+  |---|---|           
+  | 输入字节 | mixes(2×8×24) + hc_scale(3) + hc_base(24)，fp32 ≈ 1.6 KB |
+  | 输出字节 | pre(2×8×4) + post(同) + comb(2×8×4×4) ≈ 1.5 KB |
+  | 理论最小 HBM 流量 | ≈ 3.1 KB（读一次输入 + 写一次输出） |
+  | FLOPs | sigmoid×2 + comb 仿射 + 20 轮 row/col 归一化(sum+div) ≈ 2.8万 |
+  | 算术强度 | 28000 / 3180 | ≈ 8.8 FLOP/byte |
 
-在这个规模下，耗时正比于 kernel launch 次数而非 FLOPs——实测每个 aten 算子的
-派发成本约 11.8 µs，而真正的计算只要 23 µs。所以优化目标是**少启动几次**，
-不是算得更快。
+fp32 逐元素类算子在大多数加速器上的 ridge point 在十几到大几十 FLOP/byte，8.8 明显在线以下，因此不是 compute-bound。
 
-**136 个算子 → 1 个 kernel。**
+hc_split_sinkhorn 中的计算主要是 sigmoid、exp、逐元素乘加，外加 20 轮 row-sum/col-sum 归一化，comb 这个 256元素（1KB）的张量每轮归一化要被读写 memory 好几遍，因此把 20轮 Sinkhorn 全部塞进一个 kernel，中间结果留在寄存器里，可以极大的减少访存量。
+
+在目前给定的输入数据的情况下，这种方法是 OK 的。
+
 
 ### 实现
 
@@ -96,29 +111,27 @@ C ← C/(rowsum+eps); C ← C/(colsum+eps)      等价于     C_k = diag(u)·C�
 于是循环只携带两个长度 4 的 1D 向量，`C₀` 成为循环不变量——正面消除了触发条件。
 **编译时间从 >1800 秒降到 0.51 秒，与 torch 参考的最大误差 7.45e-08。**
 
-完整的定位过程、12 个二分用例的结果、4 个变体的交叉验证数据，见
-**[docs/debug-hc_split_sinkhorn.md](docs/debug-hc_split_sinkhorn.md)**。
-
-## 关于反作弊
-
-赛制禁止「代码实际执行路径未运行自定义算子、全程仅使用 PyTorch 内置算子」的提交。
-本作品的执行路径可以逐点核验：
-
-- `v1/hc_split_sinkhorn.py` 的 `ModelNew.forward()` 中**没有任何 try/except、
-  没有任何条件分支**，唯一的计算路径就是调用 `_hc_split_sinkhorn_kernel`
-  这个 `@triton.jit` kernel。forward 里除了 3 次 `torch.empty`（分配输出）
-  和 3 次 `view`（改元信息）之外，不调用任何 PyTorch 计算算子。
-- `bench/auto_bench.py` 与官方上游**逐字一致**，未打任何补丁。
-  `run.sh` 只负责拉起子进程和汇总，不介入任何计时或比对逻辑。
 
 ## 环境说明
 
 实测环境见 [results/cuda-MetaX_C500/RESULTS.md](results/cuda-MetaX_C500/RESULTS.md)
 和 `env/metax-c500/env.lock.txt`（由 `env/capture.sh` 在机器上生成）。
 
+### 环境自检
+
+`env/selftest.py`（`env/capture.sh` 会自动调用，也可以单独跑 `python3 env/selftest.py`）
+最后一步会自动发现每个算子文件夹下的 `selftest_probe.py` 并逐个调用其
+`probe(dev) -> (bool, str)`。判据跟 `bench/run_all.py` 一致：仓库根目录下
+同时有 `v0/` 和 `v1/` 子目录的文件夹会被当成算子文件夹扫描。
+
+本文件夹的 `selftest_probe.py` 验的是 v1 kernel 实际用到的 u/v 对角缩放
+写法——也就是绕开「关键难点」一节那个沐曦 `make_ttgir` 段错误之后的版本，
+不是那个已知会崩的朴素写法。这一步过了，说明当前机器的 Triton 工具链能编译
++ 执行 + 数值校验通过 v1 用到的全部特性，`bash run.sh` 出来的性能数字才可信；
+过不了，说明工具链本身有问题，不用往下排查 kernel 逻辑。
+
 `env/metax-c500/requirements.txt` 刻意**不 pin** torch 和 triton：两者都由沐曦
-官方 MACA 镜像提供，版本与 MACA toolkit / 驱动强绑定，用 pip 装 PyPI 上的通用版
-会覆盖掉 MACA 版，直接导致 `torch.cuda` 不可用。
+官方 MACA 镜像提供，版本与 MACA toolkit / 驱动强绑定。
 
 ### 一处可移植性处理
 
@@ -127,7 +140,3 @@ C ← C/(rowsum+eps); C ← C/(colsum+eps)      等价于     C_k = diag(u)·C�
 目标后端，**不会**把 `'cuda'` 重写成 `'npu'`，所以硬编码 cuda 的文件在昇腾等后端上
 会直接报错。返回 CPU 张量后，`_detect_target_device()` + `_move_to_device()`
 会自动搬到当前加速器上（计时发生在搬运之后，不影响结果）。
-
-`v0/hc_split_sinkhorn.py` 与赛题原文**逐字一致**（该题的 `get_inputs()` 本来就建
-CPU 张量），仅删除了末尾的 `if __name__ == "__main__"` 自测块——`auto_bench.py`
-L74 的 `_filter_module_ast()` 本来也会丢弃它。计算逻辑未改动。

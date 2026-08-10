@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""批量运行 v0/v1 对拍 + 计时，汇总成 results/<chip>/ 下的 json 和 markdown 表。
+"""批量运行 v0/v1 对拍 + 计时，汇总成每个算子文件夹下 results/<chip>/ 的 json 和 markdown 表。
+
+目录约定：bench/、env/ 是所有算子共用的基础设施，放在仓库根目录；每个算子一个
+文件夹（如 hc_split_sinkhorn_submission/），内部是 tasks/（原题 + 该算子的
+tasks.json）、v0/、v1/、results/。本脚本在仓库根目录下自动发现每一个算子文件夹
+——判据是"同时有 v0/ 和 v1/ 子目录"，不需要额外注册。
 
 每个 task 都是拉起一个独立的 auto_bench.py 子进程来跑的，理由有两个：
   1. auto_bench.py 保持与官方仓库逐字一致（见 bench/auto_bench.py 顶部说明），
@@ -7,9 +12,9 @@
   2. 进程隔离，某个 task 把 Triton 编译搞崩不会带走整批。
 
 用法:
-    python bench/run_all.py                      # 自动探测芯片，跑全部 task
+    python bench/run_all.py                      # 自动探测芯片，跑所有算子文件夹下的全部 task
     python bench/run_all.py --chip metax-c500    # 显式指定芯片名（只影响输出目录名）
-    python bench/run_all.py --only hc_split_sinkhorn
+    python bench/run_all.py --only hc_split_sinkhorn    # 按 task 名过滤，跨算子文件夹匹配
     python bench/run_all.py --warmup 50 --repeat 100    # 开发期快速迭代
 """
 import argparse
@@ -21,14 +26,25 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-AUTO_BENCH = ROOT / "bench" / "auto_bench.py"
-MANIFEST = ROOT / "bench" / "tasks.json"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+AUTO_BENCH = REPO_ROOT / "bench" / "auto_bench.py"
+
 
 # auto_bench.py L562 的输出格式
 PASS_RE = re.compile(
     r"PASS accuracy;\s*v0=([\d.eE+-]+)\s*ms,\s*v1=([\d.eE+-]+)\s*ms,\s*speedup=([\d.eE+-]+)x"
 )
+
+
+def discover_operator_dirs() -> list[Path]:
+    """每个算子一个文件夹，特征是同时有 v0/ 和 v1/ 子目录——就是这两个目录直接判定的依据。"""
+    dirs = []
+    for p in sorted(REPO_ROOT.iterdir()):
+        if not p.is_dir() or p.name.startswith("."):
+            continue
+        if (p / "v0").is_dir() and (p / "v1").is_dir():
+            dirs.append(p)
+    return dirs
 
 
 def detect_chip() -> str:
@@ -79,9 +95,9 @@ def collect_env() -> dict:
     return env
 
 
-def run_one(name: str, args) -> dict:
-    v0 = ROOT / "v0" / f"{name}.py"
-    v1 = ROOT / "v1" / f"{name}.py"
+def run_one(op_dir: Path, name: str, args) -> dict:
+    v0 = op_dir / "v0" / f"{name}.py"
+    v1 = op_dir / "v1" / f"{name}.py"
     rec = {"name": name}
     if not v0.is_file() or not v1.is_file():
         rec.update(status="missing-file", message=f"v0 exists={v0.is_file()}, v1 exists={v1.is_file()}")
@@ -98,7 +114,7 @@ def run_one(name: str, args) -> dict:
         "--rtol", str(args.rtol),
     ]
     t0 = time.perf_counter()
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO_ROOT))
     rec["wall_s"] = round(time.perf_counter() - t0, 1)
     out = proc.stdout + proc.stderr
     rec["raw_output"] = out.strip()
@@ -179,7 +195,7 @@ def main():
     check_python_version()
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--chip", default="auto", help="芯片标识，仅用于命名输出目录；默认自动探测")
-    p.add_argument("--only", nargs="*", default=None, help="只跑指定的 task")
+    p.add_argument("--only", nargs="*", default=None, help="只跑指定的 task（跨算子文件夹按 task 名过滤）")
     p.add_argument("--warmup", type=int, default=200, help="与官方默认一致")
     p.add_argument("--repeat", type=int, default=500, help="与官方默认一致")
     p.add_argument("--seed", type=int, default=42)
@@ -187,13 +203,31 @@ def main():
     p.add_argument("--rtol", type=float, default=1e-2)
     args = p.parse_args()
 
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    names = [t["name"] for t in manifest["tasks"]]
+    op_dirs = discover_operator_dirs()
+    if not op_dirs:
+        raise SystemExit(f"在 {REPO_ROOT} 下没找到任何算子文件夹（需要同时有 v0/ 和 v1/ 子目录）")
+
+    # 先读完所有算子文件夹各自的 tasks.json，把 --only 校验放在全局层面——
+    # 单个算子文件夹里找不到某个 task 名不代表它是"未知 task"，可能只是属于
+    # 另一个算子文件夹。
+    plan = []  # [(op_dir, [name, ...]), ...]
+    all_names = []
+    for op_dir in op_dirs:
+        manifest_path = op_dir / "tasks" / "tasks.json"
+        if not manifest_path.is_file():
+            print(f"[{op_dir.name}] 跳过：找不到 {manifest_path}")
+            continue
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        names = [t["name"] for t in manifest["tasks"]]
+        plan.append((op_dir, names))
+        all_names.extend(names)
+
     if args.only:
-        unknown = set(args.only) - set(names)
+        unknown = set(args.only) - set(all_names)
         if unknown:
-            raise SystemExit(f"未知 task: {sorted(unknown)}\n可选: {names}")
-        names = [n for n in names if n in args.only]
+            raise SystemExit(f"未知 task: {sorted(unknown)}\n可选: {all_names}")
+        plan = [(op_dir, [n for n in names if n in args.only]) for op_dir, names in plan]
+        plan = [(op_dir, names) for op_dir, names in plan if names]
 
     env = collect_env()
     chip = args.chip if args.chip != "auto" else env["chip"].replace(":", "-").replace(" ", "_")
@@ -202,31 +236,35 @@ def main():
     if args.warmup != 200 or args.repeat != 500:
         print(f"注意: warmup={args.warmup} repeat={args.repeat} 与官方默认(200/500)不同，"
               f"这组数字只适合开发期迭代，**不要**用于最终提交的性能报告")
-    print(f"共 {len(names)} 个 task\n")
+    print(f"共 {len(plan)} 个算子文件夹: {', '.join(op_dir.name for op_dir, _ in plan)}\n")
 
-    records = []
-    for i, name in enumerate(names, 1):
-        print(f"[{i}/{len(names)}] {name} ... ", end="", flush=True)
-        rec = run_one(name, args)
-        records.append(rec)
-        if rec["status"] == "pass":
-            print(f"{rec['speedup']:.2f}x  ({rec['v0_ms']:.4f} → {rec['v1_ms']:.4f} ms)  {verdict(rec)}")
-        else:
-            print(f"{verdict(rec)}  {(rec.get('message') or '')[:120]}")
+    any_fail = False
+    for op_dir, names in plan:
+        print(f"=== {op_dir.name}（{len(names)} 个 task） ===")
+        records = []
+        for i, name in enumerate(names, 1):
+            print(f"[{i}/{len(names)}] {name} ... ", end="", flush=True)
+            rec = run_one(op_dir, name, args)
+            records.append(rec)
+            if rec["status"] == "pass":
+                print(f"{rec['speedup']:.2f}x  ({rec['v0_ms']:.4f} → {rec['v1_ms']:.4f} ms)  {verdict(rec)}")
+            else:
+                print(f"{verdict(rec)}  {(rec.get('message') or '')[:120]}")
+                any_fail = True
 
-    outdir = ROOT / "results" / chip
-    outdir.mkdir(parents=True, exist_ok=True)
-    payload = {"chip": chip, "env": env, "bench_args": vars(args), "results": records}
-    (outdir / "results.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    md = render_markdown(chip, env, records)
-    (outdir / "RESULTS.md").write_text(md, encoding="utf-8")
+        outdir = op_dir / "results" / chip
+        outdir.mkdir(parents=True, exist_ok=True)
+        payload = {"chip": chip, "env": env, "bench_args": vars(args), "results": records}
+        (outdir / "results.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        md = render_markdown(chip, env, records)
+        (outdir / "RESULTS.md").write_text(md, encoding="utf-8")
 
-    print(f"\n{'-' * 60}")
-    print(md)
-    print(f"已写入 {outdir / 'results.json'}")
-    print(f"已写入 {outdir / 'RESULTS.md'}")
+        print(f"\n{'-' * 60}")
+        print(md)
+        print(f"已写入 {outdir / 'results.json'}")
+        print(f"已写入 {outdir / 'RESULTS.md'}\n")
 
-    if any(r["status"] == "fail" for r in records):
+    if any_fail:
         raise SystemExit(1)
 
 
