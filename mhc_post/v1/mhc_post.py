@@ -55,11 +55,11 @@ def _mhc_post_kernel(
     h_mask = h < H
 
     residual = tl.load(row_residual + tl.arange(0, M)[:, None] * H + h[None, :], mask=h_mask[None, :]).to(tl.float32)
-    comb_res_mix = tl.load(row_comb_res_mix + tl.arange(0, M)[:, None] * M + tl.arange(0, M)[None, :])
     x_val = tl.load(row_x + h, mask=h_mask).to(tl.float32)
     
-    for i in range(M):
-        term2 = tl.sum(comb_res_mix[:, i][:, None] * residual, axis=0)  
+    for i in tl.static_range(M):
+        comb_col = tl.load(row_comb_res_mix + tl.arange(0, M) * M + i)
+        term2 = tl.sum(comb_col[:, None] * residual, axis=0)  
         post_layer_mix_val = tl.load(row_post_layer_mix + i * 1)  
         output_val = x_val * post_layer_mix_val + term2  
         tl.store(row_output + i * H + h, output_val.to(tl.bfloat16), mask=h_mask)
