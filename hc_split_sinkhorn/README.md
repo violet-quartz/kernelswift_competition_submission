@@ -1,4 +1,4 @@
-# KernelSwift 算子创新大赛 — hc_split_sinkhorn（沐曦 C500）
+# KernelSwift 算子创新大赛 — hc_split_sinkhorn
 
 用 Triton 重写 `hc_split_sinkhorn`，正确性通过官方 `auto_bench.py` 校验。
 
