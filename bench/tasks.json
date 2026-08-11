@@ -1,0 +1,6 @@
+{
+  "tasks": [
+    {"name": "hc_split_sinkhorn"},
+    {"name": "mhc_post"}
+  ]
+}

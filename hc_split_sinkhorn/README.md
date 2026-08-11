@@ -23,7 +23,8 @@
 ├── run.sh                            一键运行脚本（对拍 + 计时 + 产出结果，所有算子共用）
 ├── bench/
 │   ├── auto_bench.py                 官方评测脚本（与上游逐字一致，未做任何修改）
-│   └── run_all.py                    批量拉起 auto_bench + 汇总结果，自动发现每个算子文件夹
+│   ├── run_all.py                    批量拉起 auto_bench + 汇总结果，按 tasks.json 里的 name 逐个跑
+│   └── tasks.json                    所有算子共用的 task 清单，只有 name，运行时按 name 找同名算子文件夹
 ├── env/
 │   ├── capture.sh                    环境快照
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
@@ -33,17 +34,18 @@
     ├── README.md                     本文件
     ├── selftest_probe.py             v1 kernel 特性冒烟探针，供 env/selftest.py 自动发现
     ├── tasks/
-    │   ├── hc_split_sinkhorn.py      赛题原始文件（未修改，供对照）
-    │   └── tasks.json                本算子的题目清单
+    │   └── hc_split_sinkhorn.py      赛题原始文件（未修改，供对照）
     ├── v0/hc_split_sinkhorn.py       torch 参考实现（Model）—— 加速比的基准
     ├── v1/hc_split_sinkhorn.py       Triton 优化实现（ModelNew）—— 参赛作品
     ├── scratch/                      torch.compile 对照实验（Inductor 生成代码 dump，判断编译器融合程度用）
     └── results/                      性能测试结果
 ```
 
-`bench/run_all.py` 靠"同时有 `v0/` 和 `v1/` 子目录"自动识别算子文件夹，
-不需要在别处额外注册；`env/selftest.py` 的探针发现用的是同一套判据
-（见下面「环境自检」一节）。
+`bench/run_all.py` 读根目录共享的 `bench/tasks.json` 决定跑哪些 task，
+每个 task 的 `name` 就是仓库根目录下同名的算子文件夹（跟 `bench/check_spill.py`
+认 task 名的方式一致），新增算子只需要在 `tasks.json` 里加一行 `name`。
+`env/selftest.py` 的探针发现是另一套机制——按"同时有 `v0/` 和 `v1/` 子目录"
+自动扫描，不需要在 `tasks.json` 里登记（见下面「环境自检」一节）。
 
 ## 快速开始
 
