@@ -117,11 +117,11 @@ echo
 echo "==> [4/5] 安装纯 python 依赖"
 # 注意：torch、torch_npu、triton-ascend 刻意不在 requirements.txt 里 pin，
 # 它们与驱动/CANN 版本强绑定，pip 覆盖装会直接把环境搞坏。
-python3 -m pip install -r "$ROOT/env/ascend-a2/requirements.txt"
+python3 -m pip install -r "$ROOT/env/ascend-910b3/requirements.txt"
 
 echo
 echo "==> [5/5] 环境快照 + 后端自检"
-bash "$ROOT/env/capture.sh" ascend-a2
+bash "$ROOT/env/capture.sh" ascend-910b3
 
 cat <<'EOF'
 

@@ -1,0 +1,32 @@
+{
+  "chip": "npu-Ascend910B3",
+  "env": {
+    "python": "3.11.15",
+    "platform": "Linux-5.10.0-216.0.0.115.oe2203sp4.aarch64-aarch64-with-glibc2.35",
+    "chip": "npu:Ascend910B3",
+    "torch": "2.7.1+cpu",
+    "triton": "3.2.0"
+  },
+  "bench_args": {
+    "chip": "auto",
+    "only": [
+      "mhc_post"
+    ],
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01
+  },
+  "results": [
+    {
+      "name": "mhc_post",
+      "wall_s": 28.6,
+      "raw_output": "PASS accuracy; v0=2.233400 ms, v1=1.206730 ms, speedup=1.851x\n\nSummary: 1 passed, 0 failed, 1 total.",
+      "status": "pass",
+      "v0_ms": 2.2334,
+      "v1_ms": 1.20673,
+      "speedup": 1.851
+    }
+  ]
+}
