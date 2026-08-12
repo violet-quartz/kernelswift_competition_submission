@@ -177,7 +177,15 @@ def summarize_npu(outdir: Path):
         print(f"  （{outdir} 下没找到 kernel_details.csv，"
               f"可能 profiling 还没落盘，或这个版本产物结构不同——手动翻一下目录）")
         return
-    path = csvs[0]
+
+    # prof_v1/ 这类目录是**累积**的：每跑一次 profiling 就多一个带时间戳的子目录，
+    # 旧的不会被清掉。这里必须按修改时间取最新的一个 —— 早先按 rglob 的返回顺序
+    # 取 csvs[0]，结果永远解析到时间戳最早的那次，改了 kernel 也看不出变化
+    # （表现为两次输出逐字节相同，极具迷惑性）。
+    csvs.sort(key=lambda p: p.stat().st_mtime)
+    path = csvs[-1]
+    if len(csvs) > 1:
+        print(f"\n  （{outdir} 下有 {len(csvs)} 份历史产物，取最新的一份）")
     print(f"\n  解析 {path}")
 
     with path.open(encoding="utf-8-sig", newline="") as f:
@@ -189,55 +197,90 @@ def summarize_npu(outdir: Path):
     fields = rows[0].keys()
     c_name = _find_col(fields, "name") or list(fields)[0]
     c_dur = _find_col(fields, "duration")
-    c_block = _find_col(fields, "block", "dim")
-    # 注意不能写成 `"ratio" in f.lower()` —— "du(ratio)n" 里就有这个子串，
-    # Duration(us) 会被误判成占用率列。aic 指标实际叫 aic_mte2_ratio 这种。
-    ratio_cols = [
-        f for f in fields
-        if f != c_dur and (f.lower().endswith("ratio") or "_ratio" in f.lower())
-    ]
+    # 实测 CANN 这一版叫 "Block Num"（不是 Block Dim），两种都试
+    c_block = _find_col(fields, "block", "num") or _find_col(fields, "block", "dim")
+    c_wait = _find_col(fields, "wait", "time")
+    c_core = _find_col(fields, "accelerator", "core")
 
-    # 按 kernel 名聚合：次数、总耗时、各 ratio 的均值
+    # 各流水线的**绝对耗时**列（aiv_mte2_time(us) 这种）。比 ratio 有用得多：
+    # ratio 是"占 aicore_time 的比例"，多条流水线本该并行，所以 ratio 可以加起来
+    # 超过 1；用绝对时间才能算出重叠系数，看出流水线到底有没有并行起来。
+    time_cols = [
+        f for f in fields
+        if f != c_dur and ("_time(" in f.lower()) and "total" not in f.lower()
+    ]
+    # aicore_time / aiv_time 是"核忙的总时间"，是分母，不是某一条流水线
+    pipe_cols = [f for f in time_cols
+                 if not f.lower().startswith(("aicore_time", "aiv_time"))]
+    busy_cols = [f for f in time_cols if f not in pipe_cols]
+
+    def fnum(r, c):
+        try:
+            return float(r.get(c) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
     agg = {}
     for r in rows:
         key = r.get(c_name, "?")
-        a = agg.setdefault(key, {"n": 0, "dur": 0.0, "block": r.get(c_block, "?"),
-                                 "ratios": {c: [] for c in ratio_cols}})
+        a = agg.setdefault(key, {
+            "n": 0, "dur": 0.0, "wait": 0.0,
+            "block": r.get(c_block) or "?", "core": r.get(c_core) or "?",
+            "pipes": {c: 0.0 for c in pipe_cols},
+            "busy": {c: 0.0 for c in busy_cols},
+        })
         a["n"] += 1
-        try:
-            a["dur"] += float(r.get(c_dur) or 0)
-        except ValueError:
-            pass
-        for c in ratio_cols:
-            try:
-                a["ratios"][c].append(float(r[c]))
-            except (TypeError, ValueError):
-                pass
+        a["dur"] += fnum(r, c_dur)
+        a["wait"] += fnum(r, c_wait)
+        for c in pipe_cols:
+            a["pipes"][c] += fnum(r, c)
+        for c in busy_cols:
+            a["busy"][c] += fnum(r, c)
 
     total = sum(a["dur"] for a in agg.values()) or 1.0
-    print(f"\n  {'kernel':<42} {'次数':>5} {'总耗时(us)':>11} {'占比':>7} {'BlockDim':>9}")
-    print("  " + "-" * 78)
+    print(f"\n  {'kernel':<38} {'次数':>4} {'总耗时(us)':>11} {'占比':>7} "
+          f"{'BlockNum':>9} {'等待(us)':>9}")
+    print("  " + "-" * 84)
     for name, a in sorted(agg.items(), key=lambda kv: -kv[1]["dur"]):
-        short = name if len(name) <= 40 else name[:37] + "..."
-        print(f"  {short:<42} {a['n']:>5} {a['dur']:>11.1f} "
-              f"{a['dur'] / total * 100:>6.1f}% {str(a['block']):>9}")
+        short = name if len(name) <= 36 else name[:33] + "..."
+        print(f"  {short:<38} {a['n']:>4} {a['dur']:>11.1f} "
+              f"{a['dur'] / total * 100:>6.1f}% {str(a['block']):>9} {a['wait']:>9.1f}")
 
-    if not ratio_cols:
-        print("\n  （没有 aic_*_ratio 列 —— 说明 profiling 没带上 PipeUtilization，"
+    if not pipe_cols:
+        print("\n  （没有 *_time(us) 流水线列 —— profiling 没带上 PipeUtilization，"
               "只能看耗时，看不出时间花在访存还是计算）")
         return
 
-    print(f"\n  AI Core 流水线占用率（均值）：")
+    print("\n  流水线拆解（每次调用的平均值，单位 us）：")
     for name, a in sorted(agg.items(), key=lambda kv: -kv[1]["dur"]):
-        vals = {c: (sum(v) / len(v)) for c, v in a["ratios"].items() if v}
-        if not vals:
+        n = a["n"] or 1
+        pipes = {c: v / n for c, v in a["pipes"].items() if v > 0}
+        if not pipes:
             continue
-        short = name if len(name) <= 40 else name[:37] + "..."
-        print(f"    {short}")
-        for c, v in sorted(vals.items(), key=lambda kv: -kv[1]):
-            print(f"      {c:<28} {v:>8.4f}")
-    print("\n  判读：mte2(搬入)+mte3(搬出) 高 => 瓶颈是带宽；")
-    print("        所有 ratio 都低 => AI Core 在空等，瓶颈是调度/launch 开销。")
+        short = name if len(name) <= 36 else name[:33] + "..."
+        busy = max((v / n for v in a["busy"].values()), default=0.0)
+        wall = a["dur"] / n
+        print(f"\n    {short}   core={a['core']}  墙钟={wall:.1f}  核忙={busy:.1f}")
+        for c, v in sorted(pipes.items(), key=lambda kv: -kv[1]):
+            bar = "#" * int(round(v / wall * 30)) if wall else ""
+            print(f"      {c:<24} {v:>8.1f}  {v / wall * 100:>5.1f}%  {bar}")
+
+        # 重叠系数：各流水线时间之和 / 核忙时间。
+        #   ≈1 => 完全串行（读完再算再写），流水没并行起来
+        #   越大 => 重叠越好；理想情况下墙钟能压到 max(单条流水线)
+        s = sum(pipes.values())
+        if busy > 0:
+            slowest = max(pipes.values())
+            print(f"      {'—' * 24}")
+            print(f"      流水线时间之和 {s:.1f} / 核忙 {busy:.1f} = "
+                  f"重叠系数 {s / busy:.2f}x")
+            print(f"      最慢的一条 {slowest:.1f} us —— 若能完全重叠，"
+                  f"墙钟下限就是它（当前 {wall:.1f}，还有 {wall / slowest:.2f}x 空间）")
+
+    print("\n  判读：")
+    print("    * 某条流水线接近 100% => 它就是瓶颈，照它优化（mte2/mte3=访存，vec=计算）")
+    print("    * 都不高但核一直忙 + 重叠系数≈1 => 流水线在串行，缺少软件流水/预取")
+    print("    * 核不忙（墙钟 >> 核忙）或等待时间大 => 瓶颈在调度/launch，不在核内")
 
 
 def main():
