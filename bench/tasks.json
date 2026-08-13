@@ -1,6 +1,7 @@
 {
   "tasks": [
     {"name": "hc_split_sinkhorn"},
-    {"name": "mhc_post"}
+    {"name": "mhc_post"},
+    {"name": "head_compute_mix_bwd"}
   ]
 }
