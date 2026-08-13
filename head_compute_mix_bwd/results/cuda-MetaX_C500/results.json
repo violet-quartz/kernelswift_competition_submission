@@ -21,12 +21,12 @@
   "results": [
     {
       "name": "head_compute_mix_bwd",
-      "wall_s": 11.9,
-      "raw_output": "PASS accuracy; v0=0.174844 ms, v1=0.125159 ms, speedup=1.397x\n\nSummary: 1 passed, 0 failed, 1 total.",
+      "wall_s": 12.3,
+      "raw_output": "PASS accuracy; v0=0.186859 ms, v1=0.118115 ms, speedup=1.582x\n\nSummary: 1 passed, 0 failed, 1 total.",
       "status": "pass",
-      "v0_ms": 0.174844,
-      "v1_ms": 0.125159,
-      "speedup": 1.397
+      "v0_ms": 0.186859,
+      "v1_ms": 0.118115,
+      "speedup": 1.582
     }
   ]
 }
