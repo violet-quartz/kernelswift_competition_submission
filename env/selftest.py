@@ -207,6 +207,36 @@ def main() -> int:
         if not ok:
             return 1
 
+    # --- ⑦ 可达访存带宽 -----------------------------------------------------
+    # 优化 memory-bound 算子时，"跑到了可达带宽的百分之几"是唯一能回答"还有没有
+    # 空间"的指标，而这个分母**必须在跑 benchmark 的同一台机器、同一个切片上实测**：
+    # datasheet 的标称峰值既没算上纯访存 kernel 只能吃到七八成，也没算上这台
+    # C500 是切片卡（Compute 25% / Vram Quota 16000 MiB）。量出来的数字跟着
+    # env.lock.txt 一起归档，换机器重新 capture 就自动重测。
+    #
+    # 放在最后、而且**任何失败都不影响自检结论**：它是给优化提供参照物的，
+    # 不是"环境可不可用"的判据。测不出来最多是少个分母，不该把 rc 弄成 1、
+    # 让 capture.sh 报环境不可用。
+    print()
+    print("## 可达访存带宽（纯访存基准，用于判断算子是否撞到 roofline）")
+    try:
+        bw_path = Path(__file__).resolve().parent / "bandwidth.py"
+        spec = importlib.util.spec_from_file_location("_env_bandwidth", bw_path)
+        bwmod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bwmod)
+        # 尺寸档位在这里写死，不跟 bandwidth.py 的 argparse 默认值共用：capture.sh
+        # 是无人值守跑的，扫到 512 MiB 在切片卡上可能 OOM（会被逐档跳过，但拖时间）。
+        # 要更细的扫描或换 dtype，单独跑 python3 env/bandwidth.py。
+        bw_results = bwmod.sweep(
+            found, getattr(torch, found),
+            sizes=[64, 128, 256],
+            dtypes=[torch.float32, torch.bfloat16],
+            warmup=5, repeat=20, rounds=3,
+        )
+        bwmod.report(bw_results, bwmod._EXAMPLE_RW, "bfloat16")
+    except Exception as e:  # noqa: BLE001 - 见上，这一步不该让自检失败
+        print(f"  测量失败（不影响自检结论）: {type(e).__name__}: {e}")
+
     return 0
 
 
