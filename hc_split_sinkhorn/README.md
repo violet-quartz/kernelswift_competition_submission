@@ -13,10 +13,13 @@
 ├── bench/
 │   ├── auto_bench.py                 官方评测脚本（与上游逐字一致，未做任何修改）
 │   ├── run_all.py                    批量拉起 auto_bench + 汇总结果，按 tasks.json 里的 name 逐个跑
+│   ├── check_spill.py                寄存器溢出诊断，按算子文件夹名自动发现 spill_probe.py
+│   ├── profile_chip.py               芯片侧 profiling（v0/v1 都能跑），通用驱动、不需要探针
 │   └── tasks.json                    所有算子共用的 task 清单，只有 name，运行时按 name 找同名算子文件夹
 ├── env/
 │   ├── capture.sh                    环境快照
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
+│   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
 │   └── ascend-910b3/                 昇腾环境配置
 └── hc_split_sinkhorn/                本文件夹
@@ -26,7 +29,6 @@
     │   └── hc_split_sinkhorn.py      赛题原始文件（未修改，供对照）
     ├── v0/hc_split_sinkhorn.py       torch 参考实现（Model）—— 加速比的基准
     ├── v1/hc_split_sinkhorn.py       Triton 优化实现（ModelNew）—— 参赛作品
-    ├── scratch/                      torch.compile 对照实验（Inductor 生成代码 dump，判断编译器融合程度用）
     └── results/                      性能测试结果
 ```
 
@@ -34,11 +36,11 @@
 每个 task 的 `name` 就是仓库根目录下同名的算子文件夹（跟 `bench/check_spill.py`
 认 task 名的方式一致），新增算子只需要在 `tasks.json` 里加一行 `name`。
 `env/selftest.py` 的探针发现是另一套机制——按"同时有 `v0/` 和 `v1/` 子目录"
-自动扫描，不需要在 `tasks.json` 里登记（见下面「环境自检」一节）。
+自动扫描，不需要在 `tasks.json` 里登记。
+
+`以下内容以沐曦 C500 为例，其他芯片类似`
 
 ## 快速开始
-
-以沐曦为例
 
 **以下命令都在仓库根目录下执行**（`bench/`、`env/`、`run.sh` 都在那里，不在本文件夹里）：
 
@@ -58,4 +60,10 @@ bash run.sh --only hc_split_sinkhorn
 
 实测环境见 [results/cuda-MetaX_C500/RESULTS.md](results/cuda-MetaX_C500/RESULTS.md)
 和 `env/metax-c500/env.lock.txt`（由 `env/capture.sh` 在机器上生成）。
+
+## 测试结果
+
+| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
+|---|---|---:|---:|---:|:---:|
+| hc_split_sinkhorn | MetaX C500 | 1.6087 | 0.1091 | **14.75x** | ✅ 通过 |
 
