@@ -2,6 +2,7 @@
   "tasks": [
     {"name": "hc_split_sinkhorn"},
     {"name": "mhc_post"},
-    {"name": "head_compute_mix_bwd"}
+    {"name": "head_compute_mix_bwd"},
+    {"name": "music_flamingo_rotary_embedding"}
   ]
 }
