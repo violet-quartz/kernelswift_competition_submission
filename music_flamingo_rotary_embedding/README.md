@@ -62,8 +62,6 @@ bash run.sh --only music_flamingo_rotary_embedding
 
 ## 测试结果
 
-v1 尚未实现，暂无成绩。
-
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
-| music_flamingo_rotary_embedding | MetaX C500 | — | — | — | — |
+| music_flamingo_rotary_embedding | MetaX C500 | 0.2223 | 0.1124 | **1.98x** | ✅ 通过 |
