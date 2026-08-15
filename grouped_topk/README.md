@@ -62,8 +62,6 @@ bash run.sh --only grouped_topk
 
 ## 测试结果
 
-v1 尚未实现，暂无成绩。
-
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
-| grouped_topk | MetaX C500 | — | — | — | — |
+| grouped_topk | MetaX C500 | 0.3080 | 0.1120 | **2.75x** | ✅ 通过 |
