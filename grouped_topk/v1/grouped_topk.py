@@ -62,12 +62,16 @@ def _grouped_topk_kernel(
     IS_SOFT_MAX: tl.constexpr,
     TOPK_GROUP: tl.constexpr, 
     TOPK: tl.constexpr, 
-    NUM_EXPERTS: tl.constexpr, 
-    NUM_EXPERT_GROUP: tl.constexpr 
+    NUM_EXPERTS: tl.constexpr,
+    NUM_EXPERT_GROUP: tl.constexpr,
+    # [KS-PORT] 必须由 Python 侧算好传进来，不能在 kernel 体内写
+    #   EXPERTS_PER_GROUP = NUM_EXPERTS // NUM_EXPERT_GROUP
+    # 沐曦 triton 3.0.0 上 constexpr // constexpr 的结果**不再是 constexpr**，
+    # 拿去喂 tl.arange 会编译失败（而同一行上方直接用 constexpr 参数的 arange 正常）。
+    EXPERTS_PER_GROUP: tl.constexpr
 ):
     pid = tl.program_id(0)
 
-    EXPERTS_PER_GROUP = NUM_EXPERTS // NUM_EXPERT_GROUP  # constexpr // constexpr 仍是 constexpr
     offset_group = tl.arange(0, NUM_EXPERT_GROUP)
     offset_experts = tl.arange(0, EXPERTS_PER_GROUP)
 
@@ -156,7 +160,8 @@ class ModelNew(nn.Module):
             TOPK_GROUP=self.topk_group,
             TOPK=self.topk,
             NUM_EXPERTS=num_experts,
-            NUM_EXPERT_GROUP=self.num_expert_group
+            NUM_EXPERT_GROUP=self.num_expert_group,
+            EXPERTS_PER_GROUP=num_experts // self.num_expert_group,
         )
 
         return topk_weights, topk_ids
