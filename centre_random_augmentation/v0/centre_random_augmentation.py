@@ -86,11 +86,11 @@ def random_rotation_matrices(n: int, device: torch.device, dtype: torch.dtype) -
     """
     生成 n 个随机旋转矩阵 [n,3,3]，基于随机四元数（均匀分布）。
     """
-    u1 = torch.rand(n, device=device, dtype=dtype)
+    u1 = torch.rand(n, device=device, dtype=dtype) # (n,)
     u2 = torch.rand(n, device=device, dtype=dtype)
     u3 = torch.rand(n, device=device, dtype=dtype)
 
-    q1 = torch.sqrt(1 - u1) * torch.sin(2 * math.pi * u2)
+    q1 = torch.sqrt(1 - u1) * torch.sin(2 * math.pi * u2) # (n,)
     q2 = torch.sqrt(1 - u1) * torch.cos(2 * math.pi * u2)
     q3 = torch.sqrt(u1) * torch.sin(2 * math.pi * u3)
     q4 = torch.sqrt(u1) * torch.cos(2 * math.pi * u3)
@@ -98,7 +98,7 @@ def random_rotation_matrices(n: int, device: torch.device, dtype: torch.dtype) -
     x, y, z, w = q1, q2, q3, q4
 
     # convert to rotation matrix
-    xx, yy, zz = x * x, y * y, z * z
+    xx, yy, zz = x * x, y * y, z * z # (n,)
     xy, xz, yz = x * y, x * z, y * z
     wx, wy, wz = w * x, w * y, w * z
 
@@ -135,11 +135,11 @@ def rot_vec_mul(r: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
 
 
 def centre_random_augmentation(
-    x_input_coords: torch.Tensor,
+    x_input_coords: torch.Tensor, # (n_atom, 3)
     n_sample: int = 1,
     s_trans: float = 1.0,
     centre_only: bool = False,
-    mask: Optional[torch.Tensor] = None,
+    mask: Optional[torch.Tensor] = None, # (n_atom，)
     eps: float = 1e-12,
 ) -> torch.Tensor:
     """
@@ -155,20 +155,20 @@ def centre_random_augmentation(
     if mask is None:
         center = x_input_coords.mean(dim=-2, keepdim=True)
     else:
-        m = mask.to(dtype=dtype).unsqueeze(-1)
-        center = (x_input_coords * m).sum(dim=-2, keepdim=True) / (m.sum(dim=-2, keepdim=True) + eps)
-    x = x_input_coords - center
-    x = x.unsqueeze(0).expand(n_sample, -1, -1).contiguous()
+        m = mask.to(dtype=dtype).unsqueeze(-1) # (n_atom, 1)
+        center = (x_input_coords * m).sum(dim=-2, keepdim=True) / (m.sum(dim=-2, keepdim=True) + eps) # (1, 3)
+    x = x_input_coords - center # (n_atom, 3)
+    x = x.unsqueeze(0).expand(n_sample, -1, -1).contiguous() # (n_sample, n_atom, 3)
 
     if centre_only:
         return x
 
-    R = random_rotation_matrices(n_sample, device=device, dtype=dtype)  # [n,3,3]
-    T = s_trans * torch.randn(n_sample, 3, device=device, dtype=dtype)
-    x = rot_vec_mul(R[:, None, :, :].expand(-1, x.shape[1], -1, -1), x) + T[:, None, :]
+    R = random_rotation_matrices(n_sample, device=device, dtype=dtype)  # [n_sample,3,3]
+    T = s_trans * torch.randn(n_sample, 3, device=device, dtype=dtype) # (n_sample, 3)
+    x = rot_vec_mul(R[:, None, :, :].expand(-1, x.shape[1], -1, -1), x) + T[:, None, :] # (n_sample, n_atom, 3)
 
     if mask is not None:
-        x = x * mask.to(dtype=dtype)[None, :, None]
+        x = x * mask.to(dtype=dtype)[None, :, None] # (n_sample, n_atom, 3)
     return x
 
 
