@@ -4,6 +4,11 @@
     {"name": "mhc_post"},
     {"name": "head_compute_mix_bwd"},
     {"name": "music_flamingo_rotary_embedding"},
-    {"name": "grouped_topk"}
+    {"name": "grouped_topk"},
+    {"name": "centre_random_augmentation"},
+    {"name": "fused_moe"},
+    {"name": "flex_attention"},
+    {"name": "mm_encoder_attention"},
+    {"name": "SPLADE_sparse_pooler"}
   ]
 }
