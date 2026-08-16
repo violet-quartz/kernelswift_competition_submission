@@ -62,9 +62,6 @@ bash run.sh --only centre_random_augmentation
 
 ## 测试结果
 
-v1 尚未实现，暂无成绩。优化靶子：98 个 torch 算子、输出仅 3072 个 float，纯 launch 开销。
-`v0/centre_random_augmentation.py` 顶部的 KS-PORT 注释记了本题的 harness 契约和分析结论。
-
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
-| centre_random_augmentation | MetaX C500 | — | — | — | — |
+| centre_random_augmentation | MetaX C500 | 1.0032 | 0.1711 | **5.86x** | ✅ 通过 |
