@@ -62,9 +62,10 @@ bash run.sh --only mm_encoder_attention
 
 ## 测试结果
 
-v1 尚未实现，暂无成绩。优化靶子：非因果注意力，bsz=2，复用 flex_attention 的 kernel。
-`v0/mm_encoder_attention.py` 顶部的 KS-PORT 注释记了本题的 harness 契约和分析结论。
-
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
-| mm_encoder_attention | MetaX C500 | — | — | — | — |
+| mm_encoder_attention | MetaX C500 | 0.1322 | 0.1260 | **1.05x** | ✅ 通过 |
+
+`bench/check_spill.py mm_encoder_attention` 三个 num_warps 候选均 `n_spills=0`
+（n_regs 171/158/156，smem 49152），与 flex_attention 实测值逐位相同 ——
+两者 tile 尺寸一致，寄存器不是瓶颈。
