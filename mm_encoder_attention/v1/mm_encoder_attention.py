@@ -30,12 +30,95 @@ def _ks_bootstrap():
             pass
 
 
+@triton.autotune(
+    # [KS-PORT] 和 flex_attention 同一套账：寄存器按线程分配，线程是唯一的扩容手段。
+    # C500 实测 regsPerBlock=131072、maxThreadsPerBlock=1024、warpSize=64。
+    # flex_attention 上实测三个候选的 n_regs 分别是 171 / 158 / 156，n_spills 全 0，
+    # 本 kernel 的 tile 尺寸完全相同（多的只是 batch 维在 grid 上），所以沿用同一组候选。
+    # num_stages 不调 —— 本 kernel 无循环，软件流水无从谈起。
+    configs=[
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
+        triton.Config({}, num_warps=16),
+    ],
+    key=[],
+)
 @triton.jit
-def _flash_attention_kernel(
+def _mm_encoder_attention_kernel(
+    q_ptr,            # [BATCH, Q_LEN,  NUM_HEADS * HEAD_SIZE]  fp16
+    k_ptr,            # [BATCH, KV_LEN, NUM_HEADS * HEAD_SIZE]  fp16
+    v_ptr,            # [BATCH, KV_LEN, NUM_HEADS * HEAD_SIZE]  fp16
+    out_ptr,          # [BATCH, Q_LEN,  NUM_HEADS * HEAD_SIZE]  fp16  ← 与 q 同布局
+    SCALE: tl.constexpr,
+    Q_LEN: tl.constexpr,          # 83
+    KV_LEN: tl.constexpr,         # 83
+    NUM_HEADS: tl.constexpr,      # 8
+    HEAD_SIZE: tl.constexpr,      # 64（已是 2 的幂，这一维不需要 mask）
+    BLOCK_M: tl.constexpr,        # next_pow2(Q_LEN)  = 128
+    BLOCK_N: tl.constexpr,        # next_pow2(KV_LEN) = 128
+    IS_CAUSAL: tl.constexpr,      # 本题 False（全连接注意力）
 ):
-    # 本题建议直接复用 flex_attention 那道题写好的 kernel，
-    # 传 IS_CAUSAL=False，grid 上多一个 batch 维即可。
-    pass
+    # grid = (BATCH, NUM_HEADS)：一个 program 负责一个 (batch, head)，一趟算完。
+    # **刻意不写 for 循环遍历 K/V 分块** —— 经典 flash-attention 那种
+    # "2D tile 作为 loop-carried 变量 + 循环体内规约" 正是沐曦上 make_ttgir
+    # 段错误的触发条件（见 hc_split_sinkhorn/docs/）。seq=83 padding 到 128
+    # 一整块就装得下，无循环即无雷。
+    pid_b = tl.program_id(0)
+    pid_h = tl.program_id(1)
+
+    offs_m = tl.arange(0, BLOCK_M)          # query 位置
+    offs_n = tl.arange(0, BLOCK_N)          # key/value 位置
+    offs_d = tl.arange(0, HEAD_SIZE)        # head 内维度
+
+    m_mask = offs_m < Q_LEN
+    n_mask = offs_n < KV_LEN
+
+    # 布局 [B, S, H*D] 连续，把 H*D 拆开看就是 [B, S, H, D]（同一块内存）：
+    #   元素 (b, s, h, d) 的偏移 = b*(S*H*D) + s*(H*D) + h*D + d
+    # 所以 batch 内的寻址和 flex_attention 完全一样，只是多一个 batch 基址。
+    # 注意 K/V 用的是 KV_LEN，和 Q 的 batch stride 可能不同。
+    stride_t = NUM_HEADS * HEAD_SIZE
+    head_off = pid_h * HEAD_SIZE
+    q_base = pid_b * Q_LEN * stride_t + head_off
+    kv_base = pid_b * KV_LEN * stride_t + head_off
+
+    # Q: [BLOCK_M, HEAD_SIZE]
+    q = tl.load(q_ptr + q_base + offs_m[:, None] * stride_t + offs_d[None, :],
+                mask=m_mask[:, None], other=0.0)
+
+    # K 直接按**转置布局**读成 [HEAD_SIZE, BLOCK_N]，省掉 tl.trans 的 layout
+    # conversion（沐曦对布局转换比较脆，能不转就不转）
+    k_t = tl.load(k_ptr + kv_base + offs_d[:, None] + offs_n[None, :] * stride_t,
+                  mask=n_mask[None, :], other=0.0)
+
+    # V: [BLOCK_N, HEAD_SIZE]
+    v = tl.load(v_ptr + kv_base + offs_n[:, None] * stride_t + offs_d[None, :],
+                mask=n_mask[:, None], other=0.0)
+
+    s = tl.dot(q, k_t, out_dtype=tl.float32)          # [BLOCK_M, BLOCK_N] fp32
+    s = s * SCALE
+
+    # 只屏蔽 padding **列**：softmax 沿 axis=1 规约，列会污染每一个有效行；
+    # 行不会互相污染，padding 行的垃圾结果由 store 的 m_mask 丢掉。
+    # 额外屏蔽行反而会制造整行 -inf → softmax 出 NaN。
+    visible = n_mask[None, :]
+    if IS_CAUSAL:                                     # 本题 False，编译期整个砍掉
+        visible = visible & (offs_n[None, :] <= offs_m[:, None])
+    s = tl.where(visible, s, float("-inf"))
+
+    # softmax（沿 axis=1，全程 fp32）。不能用 tl.softmax —— 它没有 axis 参数，
+    # 且规约方向写死为 axis=0。
+    s = s - tl.max(s, axis=1)[:, None]
+    p = tl.exp(s)
+    p = p / tl.sum(p, axis=1)[:, None]                # [BLOCK_M, BLOCK_N]
+
+    # p 降回 fp16 走硬件矩阵指令，累加仍在 fp32
+    acc = tl.dot(p.to(v.dtype), v, out_dtype=tl.float32)   # [BLOCK_M, HEAD_SIZE]
+
+    # 输出与 q 同布局，直接按 (b, m, h, d) 写回 —— v0 末尾
+    # `out.transpose(1, 2).reshape(bsz, q_len, -1)` 的那次连续化拷贝就省掉了
+    tl.store(out_ptr + q_base + offs_m[:, None] * stride_t + offs_d[None, :],
+             acc.to(out_ptr.dtype.element_ty), mask=m_mask[:, None])
 
 
 class ModelNew(nn.Module):
@@ -53,14 +136,28 @@ class ModelNew(nn.Module):
         value: torch.Tensor,
     ) -> torch.Tensor:
         # query/key/value: [bsz, seq_len, num_heads * head_size]  float16
-        # 返回: [bsz, seq_len, num_heads * head_size]  float16
+        # 返回: [bsz, q_len, num_heads * head_size]  float16
         #
-        # **非因果**全连接注意力，bsz=2, seq=83, heads=8, head_size=64。
         # num_kv_heads == num_heads == 8，不需要实现 GQA。
-        # 收益主要来自省掉 v0 的 transpose 非连续张量和末尾的连续化拷贝 ——
-        # 融合 kernel 直接按 [B, S, H*D] 布局写回。
-        # 详见 v0/mm_encoder_attention.py 顶部的 KS-PORT 说明。
-        raise NotImplementedError
+        bsz, q_len = query.shape[:2]
+        kv_len = key.shape[1]
+        assert query.is_contiguous() and key.is_contiguous() and value.is_contiguous()
+
+        out = torch.empty(bsz, q_len, self.num_heads * self.head_size,
+                          device=query.device, dtype=query.dtype)
+
+        _mm_encoder_attention_kernel[(bsz, self.num_heads)](
+            query, key, value, out,
+            SCALE=self.scale,
+            Q_LEN=q_len,
+            KV_LEN=kv_len,
+            NUM_HEADS=self.num_heads,
+            HEAD_SIZE=self.head_size,
+            BLOCK_M=triton.next_power_of_2(q_len),      # 83 -> 128
+            BLOCK_N=triton.next_power_of_2(kv_len),     # 83 -> 128
+            IS_CAUSAL=False,                            # 本题是全连接注意力
+        )
+        return out
 
 
 def get_inputs():

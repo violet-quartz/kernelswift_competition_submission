@@ -54,7 +54,7 @@ def _ks_bootstrap():
     key=[],
 )
 @triton.jit
-def _flash_attention_kernel(
+def _flex_attention_kernel(
     q_ptr,            # [SEQ_LEN, NUM_HEADS, HEAD_SIZE]  fp16
     k_ptr,            # [SEQ_LEN, NUM_HEADS, HEAD_SIZE]  fp16
     v_ptr,            # [SEQ_LEN, NUM_HEADS, HEAD_SIZE]  fp16
@@ -132,7 +132,7 @@ class ModelNew(nn.Module):
 
         BLOCK = triton.next_power_of_2(num_tokens)   # 83 -> 128
 
-        _flash_attention_kernel[(self.num_heads,)](
+        _flex_attention_kernel[(self.num_heads,)](
             query, key, value, out,
             SCALE=self.scale,
             SEQ_LEN=num_tokens,

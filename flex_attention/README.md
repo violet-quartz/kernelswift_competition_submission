@@ -62,9 +62,11 @@ bash run.sh --only flex_attention
 
 ## 测试结果
 
-v1 尚未实现，暂无成绩。优化靶子：因果注意力，seq=83，与 mm_encoder_attention 共用一个 kernel。
-`v0/flex_attention.py` 顶部的 KS-PORT 注释记了本题的 harness 契约和分析结论。
-
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
-| flex_attention | MetaX C500 | — | — | — | — |
+| flex_attention | MetaX C500 | 0.1453 | 0.1370 | **1.06x** | ✅ 通过 |
+
+v0 本身只有 145µs，而本仓库所有 v1 实测的耗时下界约 110µs（见根目录各算子
+results 的横向对比），所以本题的加速比上限只有约 1.3x —— 1.06x 已接近该上限，
+瓶颈不在 kernel 算法。`bench/check_spill.py flex_attention` 三个 num_warps
+候选均 `n_spills=0`（n_regs 171/158/156，smem 49152），寄存器不是瓶颈。

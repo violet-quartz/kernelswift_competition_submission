@@ -6,9 +6,9 @@
 
 为什么这道题需要这个探针
 ------------------------
-这是本仓库寄存器压力最大的一个 kernel。grid 只有 (NUM_HEADS,) = 8 个 program，
-每个 program 一趟吃下整个注意力头，同时活跃的 tile（按 32-bit 寄存器槽计，
-fp16 两个打包进一个槽）：
+和 flex_attention 是同一个 kernel、同样的 tile 尺寸，寄存器压力一致 ——
+唯一的区别是 grid 从 (NUM_HEADS,) 变成 (BATCH, NUM_HEADS)，那是并行度不是
+单 program 的资源占用。同时活跃的 tile（按 32-bit 寄存器槽计，fp16 两个一槽）：
 
     S / P   [128, 128] fp32  -> 16384      <- 大头
     acc     [128,  64] fp32  ->  8192
@@ -17,19 +17,15 @@ fp16 两个打包进一个槽）：
     V       [128,  64] fp16  ->  4096
                         合计  ≈ 37000
 
-C500 实测 regsPerBlock=131072、maxThreadsPerBlock=1024、warpSize=64，
-所以每线程可用寄存器 = 131072 / 线程数，且受架构上限约 255 卡住：
+flex_attention 上实测三个候选 n_regs = 171 / 158 / 156，n_spills 全 0，
+smem = 49152。本题预期同量级，但 IS_CAUSAL=False 少了一次比较和 where，
+可能略低 —— 跑一次确认，别假设。
 
-    num_warps=4  ->  256 线程 -> 145 个/线程   <- 逼近上限，最可能 spill
-    num_warps=8  ->  512 线程 ->  72 个/线程
-    num_warps=16 -> 1024 线程 ->  36 个/线程
-
-**溢出不会报错，只会悄悄变慢** —— 装不下就换出到 local memory（其实还是显存）。
-所以要在跑 run.sh 之前先查一次。
+**溢出不会报错，只会悄悄变慢**，所以在跑 run.sh 之前先查。
 
 真溢出的话的退路
 ----------------
-把 Q 切块：grid 从 (NUM_HEADS,) 改成 (NUM_HEADS, cdiv(SEQ_LEN, BLOCK_M))，
+把 Q 切块：grid 从 (BATCH, NUM_HEADS) 改成 (BATCH, NUM_HEADS, cdiv(Q_LEN, BLOCK_M))，
 BLOCK_M=32 时 S 只有 [32, 128]，压力降到约 1/4。
 **注意这样切依然不引入循环**（每个 program 处理一个 Q 块、K/V 一次读全），
 沐曦上"2D tile 作为 loop-carried 变量 + 循环体内规约"触发 make_ttgir 段错误
@@ -46,13 +42,13 @@ import triton
 
 OP_DIR = Path(__file__).resolve().parent
 
-# 必须和 v1/flex_attention.py 里 @triton.autotune 的 configs 保持一致
+# 必须和 v1/mm_encoder_attention.py 里 @triton.autotune 的 configs 保持一致
 NUM_WARPS_CANDIDATES = (4, 8, 16)
 
 
 def _load_v1():
-    path = OP_DIR / "v1" / "flex_attention.py"
-    spec = importlib.util.spec_from_file_location("_ks_v1_flexattn_spillprobe", path)
+    path = OP_DIR / "v1" / "mm_encoder_attention.py"
+    spec = importlib.util.spec_from_file_location("_ks_v1_mmenc_spillprobe", path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -77,10 +73,10 @@ def _build_args(mod, dev):
     model = mod.ModelNew(*mod.get_init_inputs()).to(dev)
     query, key, value = (t.to(dev) for t in mod.get_inputs())
 
-    num_tokens = query.shape[0]
-    out = torch.empty(num_tokens, model.num_heads * model.head_size,
+    bsz, q_len = query.shape[:2]
+    kv_len = key.shape[1]
+    out = torch.empty(bsz, q_len, model.num_heads * model.head_size,
                       device=dev, dtype=query.dtype)
-    block = triton.next_power_of_2(num_tokens)          # 83 -> 128
 
     args = (query, key, value, out)
     kwargs = dict(
@@ -88,20 +84,21 @@ def _build_args(mod, dev):
         # Triton 版本间行为不一，其他算子的探针里这套写法在沐曦 3.0.0 和
         # 昇腾 3.2.0 上都跑通过。
         SCALE=model.scale,
-        SEQ_LEN=num_tokens,
+        Q_LEN=q_len,
+        KV_LEN=kv_len,
         NUM_HEADS=model.num_heads,
         HEAD_SIZE=model.head_size,
-        BLOCK_M=block,
-        BLOCK_N=block,
-        IS_CAUSAL=True,
-        grid=(model.num_heads,),
+        BLOCK_M=triton.next_power_of_2(q_len),      # 83 -> 128
+        BLOCK_N=triton.next_power_of_2(kv_len),     # 83 -> 128
+        IS_CAUSAL=False,
+        grid=(bsz, model.num_heads),
     )
     return args, kwargs
 
 
 def warmup(dev):
     mod = _load_v1()
-    jit_fn = _unwrap_autotuner(mod._flex_attention_kernel)
+    jit_fn = _unwrap_autotuner(mod._mm_encoder_attention_kernel)
     args, kwargs = _build_args(mod, dev)
 
     # autotune 会在三个 num_warps 里挑，而 warmup() 必须显式指定一个。
