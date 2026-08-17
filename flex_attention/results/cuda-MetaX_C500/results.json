@@ -1,0 +1,32 @@
+{
+  "chip": "cuda-MetaX_C500",
+  "env": {
+    "python": "3.10.10",
+    "platform": "Linux-5.15.0-58-generic-x86_64-with-glibc2.39",
+    "chip": "cuda:MetaX C500",
+    "torch": "2.8.0+metax3.3.0.2",
+    "triton": "3.0.0"
+  },
+  "bench_args": {
+    "chip": "auto",
+    "only": [
+      "flex_attention"
+    ],
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01
+  },
+  "results": [
+    {
+      "name": "flex_attention",
+      "wall_s": 14.1,
+      "raw_output": "PASS accuracy; v0=0.145328 ms, v1=0.137029 ms, speedup=1.061x\n\nSummary: 1 passed, 0 failed, 1 total.",
+      "status": "pass",
+      "v0_ms": 0.145328,
+      "v1_ms": 0.137029,
+      "speedup": 1.061
+    }
+  ]
+}
