@@ -198,7 +198,7 @@ def _fused_moe_kernel(
     #   记过「沐曦的 make_ttgir 段错误对循环携带变量敏感」。真在 C500 上编译崩了，
     #   退路是改成 tl.static_range(E) 全展开，同时把 [KS-TUNE] 里 num_stages 的
     #   候选砍掉（展开后它没有作用）。
-    for e in range(E):
+    for e in tl.static_range(E):
         # Triton 不能用运行时标量下标索引张量，所以用 where + reduce 抽出第 e 列。
         w_e = tl.sum(tl.where(offs_e[None, :] == e, gate_w, 0.0), axis=1)   # [BLOCK_T]
 

@@ -1,0 +1,32 @@
+{
+  "chip": "cuda-MetaX_C500",
+  "env": {
+    "python": "3.10.10",
+    "platform": "Linux-5.15.0-58-generic-x86_64-with-glibc2.39",
+    "chip": "cuda:MetaX C500",
+    "torch": "2.8.0+metax3.3.0.2",
+    "triton": "3.0.0"
+  },
+  "bench_args": {
+    "chip": "auto",
+    "only": [
+      "fused_moe"
+    ],
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01
+  },
+  "results": [
+    {
+      "name": "fused_moe",
+      "wall_s": 138.5,
+      "raw_output": "Triton autotuning for function _fused_moe_kernel finished after 123.72s; best config selected: BLOCK_T: 32, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None;\nPASS accuracy; v0=3.137067 ms, v1=0.738607 ms, speedup=4.247x\n\nSummary: 1 passed, 0 failed, 1 total.",
+      "status": "pass",
+      "v0_ms": 3.137067,
+      "v1_ms": 0.738607,
+      "speedup": 4.247
+    }
+  ]
+}
