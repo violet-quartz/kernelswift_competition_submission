@@ -66,7 +66,9 @@ def main():
     print(f"\n端到端 forward: {ms * 1000:.1f} us")
 
     if len(tuners) != 1:
-        print("\n（多 kernel 版本，config 是叉乘关系，跳过逐 config 计时。)")
+        # v2：config 是叉乘关系，逐 config 扫没意义；但**分 kernel 计时**很有意义 ——
+        # 决定 partial[E,T,H] 那 340 KB 的往返值不值得想办法省掉。
+        _per_kernel_v2(mod, model, hidden_states, router_logits, ms)
         return
 
     # --- 3. 单 kernel 版本：逐 config 单独 launch 计时，绕开 autotune 包装层 ---
@@ -105,6 +107,48 @@ def main():
         print(f"{bt:>8} {nw:>6} {ns:>7} {us:>10.1f} {rel:>9}  {ok}")
     print(f"\n最快 kernel: {best:.1f} us   端到端: {ms * 1000:.1f} us"
           f"   → 差值 {ms * 1000 - best:.1f} us 是 host 侧 + launch 开销")
+
+
+def _per_kernel_v2(mod, model, hidden_states, router_logits, end_to_end_ms):
+    """按 autotune 选中的 config 分别 launch 两个 kernel 计时。"""
+    dev = hidden_states.device
+    T, H = hidden_states.shape
+    E = model.num_experts
+    x = hidden_states.contiguous()
+    logits = router_logits.contiguous()
+    w1t, w2t = model._prepared_weights(x.dtype)
+    partial = torch.empty((E, T, H), dtype=torch.float32, device=dev)
+    out = torch.empty((T, H), dtype=x.dtype, device=dev)
+
+    ek, rk = mod._moe_expert_kernel, mod._moe_reduce_kernel
+    ebt = ek.best_config.kwargs["BLOCK_T"]
+    rbt = rk.best_config.kwargs["BLOCK_T"]
+
+    def run_expert():
+        ek.fn[(E, triton.cdiv(T, ebt))](
+            x, logits, w1t, w2t, partial, T,
+            E=E, H=model.hidden_size, I=model.intermediate_size,
+            TOP_K=model.top_k, RENORM=model.renormalize,
+            BLOCK_T=ebt, num_warps=ek.best_config.num_warps, num_stages=1)
+
+    def run_reduce():
+        rk.fn[(triton.cdiv(T, rbt),)](
+            partial, out, T, E=E, H=model.hidden_size,
+            BLOCK_T=rbt, num_warps=rk.best_config.num_warps, num_stages=1)
+
+    run_expert(); run_reduce(); torch.cuda.synchronize()
+    e_us = triton.testing.do_bench(run_expert) * 1000
+    r_us = triton.testing.do_bench(run_reduce) * 1000
+    tot = end_to_end_ms * 1000
+
+    print(f"\n{'kernel':>22} {'us':>8} {'占端到端':>9}")
+    print(f"{'_moe_expert_kernel':>22} {e_us:>8.1f} {e_us / tot * 100:>8.1f}%")
+    print(f"{'_moe_reduce_kernel':>22} {r_us:>8.1f} {r_us / tot * 100:>8.1f}%")
+    print(f"{'两者之和':>22} {e_us + r_us:>8.1f} {(e_us + r_us) / tot * 100:>8.1f}%")
+    print(f"{'端到端':>22} {tot:>8.1f}")
+    print(f"\n差值 {tot - e_us - r_us:.1f} us = host 侧 + 两次 launch + partial 分配")
+    print(f"参考：reduce 要搬 {E * T * H * 4 / 1024:.0f} KB fp32 读 + "
+          f"{T * H * 2 / 1024:.0f} KB fp16 写")
 
 
 if __name__ == "__main__":
