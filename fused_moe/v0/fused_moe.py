@@ -142,7 +142,7 @@ class Model(nn.Module):
         w1 = self.w1.to(dtype)   # [E, 2*I, H]
         w2 = self.w2.to(dtype)   # [E, H, I]
 
-        expert_out = torch.zeros_like(x_rep)
+        expert_out = torch.zeros_like(x_rep) # [T*top_k, H]
         for e in range(self.num_experts):
             mask = flat_ids == e
             if not mask.any():
@@ -154,7 +154,7 @@ class Model(nn.Module):
             expert_out[mask] = act @ w2[e].T            # [n_e, H]
 
         # --- weighted reduction ---
-        expert_out = expert_out * flat_w.unsqueeze(-1)
+        expert_out = expert_out * flat_w.unsqueeze(-1) # [T*top_k, H]
         return expert_out.view(num_tokens, self.top_k, self.hidden_size).sum(dim=1)
 
 

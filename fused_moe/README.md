@@ -28,8 +28,15 @@
     │   └── fused_moe.py              赛题原始文件（未修改，供对照）
     ├── v0/fused_moe.py               torch 参考实现（Model）—— 加速比的基准
     ├── v1/fused_moe.py               Triton 优化实现（ModelNew）—— 参赛作品
+    ├── spill_probe.py                本题的 spill 探针，供 bench/check_spill.py 调用
     └── results/                      性能测试结果
 ```
+
+`spill_probe.py` 提供模块级 `warmup(dev)`，只编译不执行 v1 的 kernel，让
+`bench/check_spill.py` 读出 `n_regs / n_spills`。本题的 kernel 挂了
+`@triton.autotune`，探针会按「每线程寄存器数 ∝ (12288 + 456·BLOCK_T) / num_warps」
+挑出最容易溢出的那个 config 来编译；另有 `warmup_all(dev)` 可把全部 config
+挨个编一遍对照（通用驱动不调，手动用）。
 
 `bench/run_all.py` 读根目录共享的 `bench/tasks.json` 决定跑哪些 task，
 每个 task 的 `name` 就是仓库根目录下同名的算子文件夹（跟 `bench/check_spill.py`
@@ -62,8 +69,18 @@ bash run.sh --only fused_moe
 
 ## 测试结果
 
-v1 尚未实现，暂无成绩。优化靶子：专家循环里 8 次 host 同步 + 布尔索引 gather/scatter。
-`v0/fused_moe.py` 顶部的 KS-PORT 注释记了本题的 harness 契约和分析结论。
+v1 已实现，尚未上机，暂无成绩。
+
+思路：单 kernel 融合路由 + dispatch + top_k 规约，grid 按 token 分片
+（`grid = (cdiv(T, BLOCK_T),)`），每个 program 内部循环全部 8 个专家、用稠密的
+`gate_w[BLOCK_T, E]` 把未选中的专家权重置 0 —— 于是 v0 里那 8 次 host 同步和
+16 次布尔索引 gather/scatter 全部消失，也不需要 atomic 或第二个 kernel。
+权重在首次 forward 时一次性预转置 + 预降精度并缓存，kernel 里零 `tl.trans`、
+零 dtype 转换。`BLOCK_T` / `num_warps` / `num_stages` 交给 `@triton.autotune`。
+
+推导和踩坑都记在源码注释里：`v0/fused_moe.py` 顶部的 KS-PORT 是 harness 契约，
+`v1/fused_moe.py` 里的 KS-SHAPE（并行形状）、KS-CACHE（权重缓存）、
+KS-TUNE（三个旋钮为什么不写死）分别对应三处设计决策。
 
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
