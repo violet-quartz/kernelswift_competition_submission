@@ -71,8 +71,9 @@ OP_DIR = Path(__file__).resolve().parent
 #
 # shared memory（**本题真正的瓶颈**，见 v1 里的 [KS-SMEM]）：
 #     smem = BLOCK_T·H·2 + BLOCK_T·I·2 + 3·H·I·2·num_stages
-# 已在 C500 上逐字节验证：BLOCK_T=64 / num_stages=2 → 122880，与 triton 报的
-# "Required: 122880, Hardware limit: 65536" 完全一致。
+# 保守上界，C500 上校准过 7 个点：ns=2 时逐字节相符（BLOCK_T=64 → 122880）；
+# ns=1 时估算比实测多一个 act 项（BLOCK_T=32：估 61440 / 实测 57344），
+# 因为权重不双缓冲时 act 能复用已死的 w1g 空间。多出来的部分当安全余量。
 _SMEM_LIMIT = 65536              # C500 实测硬件上限
 
 # 寄存器槽（次要约束）：常数项 = 三块权重 tile，一次项 = x/acc/gate/up/y/gate_w
