@@ -44,6 +44,18 @@ def _noop_kernel(p):
     pass
 
 
+@triton.autotune(configs=[triton.Config({}, num_warps=4)], key=[])
+@triton.jit
+def _noop_autotuned_kernel(p):
+    """同上，但挂了 @triton.autotune（单 config，调优本身在 warmup 里就结束）。
+
+    与 _noop_kernel 的差值 = Autotuner 包装层每次调用的净成本：构造 key、查 cache、
+    再委派给 JITFunction。key=[] 时它不会重新 benchmark，但那几步 Python 仍然每次都走。
+    如果这一项可观，"调完之后把赢家写死、摘掉 autotune" 就是一笔白捡的收益。
+    """
+    pass
+
+
 def load_v1(name: str, ver: str = "v1"):
     # 每个算子一个文件夹：ROOT/<name>/<ver>/<name>.py
     # （早先仓库是扁平布局 ROOT/v1/<name>.py，这里跟着改过了，别改回去。）
@@ -122,6 +134,20 @@ def main():
     n_prog = 16
     rows.append(("② + 空 kernel launch",
                  bench(lambda: _noop_kernel[(n_prog,)](dummy), sync, args.warmup, args.repeat)))
+
+    # ②b 两次连续 launch。②b-② 才是"多一个 kernel"的**边际**成本 ——
+    #     launch 是异步的，第二次的 Python 开销可能与第一次的执行重叠，
+    #     所以边际成本未必等于 ②-①。要不要把两个 kernel 合成一个，看的是这个差值。
+    def two_launch():
+        _noop_kernel[(n_prog,)](dummy)
+        _noop_kernel[(n_prog,)](dummy)
+
+    rows.append(("②b + 两次空 kernel launch", bench(two_launch, sync, args.warmup, args.repeat)))
+
+    # ②c 挂了 autotune 的空 kernel。②c-② = Autotuner 包装层的每次调用成本。
+    rows.append(("②c + 空 kernel launch（带 autotune）",
+                 bench(lambda: _noop_autotuned_kernel[(n_prog,)](dummy),
+                       sync, args.warmup, args.repeat)))
 
     # ③ 输出张量分配的成本。照 forward 里的实际形状分配。
     #    ③-① 就是 torch.empty 的净开销。这一项若占大头，优化方向是复用
