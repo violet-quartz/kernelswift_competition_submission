@@ -67,11 +67,22 @@ import triton
 OP_DIR = Path(__file__).resolve().parent
 
 
-# 同时活跃的 32-bit 寄存器槽，见模块 docstring 的推导。
-# 常数项 = 三块权重 tile（不随 BLOCK_T 变）；一次项 = x/acc/gate/up/y/gate_w。
-_SLOTS_FLOOR = 4096 * 3          # w1g + w1u + w2t，都是 fp16
-_SLOTS_PER_BLOCK_T = 64 + 128 + 64 + 64 + 128 + 8      # x acc gate up y gate_w
-_WARP_SIZE = 64                  # 沐曦 C500 实测值；只用于排序，等比缩放不影响名次
+# --- 两个静态资源估算式 ---
+#
+# shared memory（**本题真正的瓶颈**，见 v1 里的 [KS-SMEM]）：
+#     smem = BLOCK_T·H·2 + BLOCK_T·I·2 + 3·H·I·2·num_stages
+# 已在 C500 上逐字节验证：BLOCK_T=64 / num_stages=2 → 122880，与 triton 报的
+# "Required: 122880, Hardware limit: 65536" 完全一致。
+_SMEM_LIMIT = 65536              # C500 实测硬件上限
+
+# 寄存器槽（次要约束）：常数项 = 三块权重 tile，一次项 = x/acc/gate/up/y/gate_w
+_SLOTS_FLOOR = 4096 * 3
+_SLOTS_PER_BLOCK_T = 64 + 128 + 64 + 64 + 128 + 8
+_WARP_SIZE = 64                  # 沐曦 C500 实测值
+
+
+def _smem_bytes(block_t, num_stages, H=128, I=64):
+    return block_t * H * 2 + block_t * I * 2 + 3 * H * I * 2 * num_stages
 
 
 def _regs_per_thread(block_t, num_warps):
@@ -140,7 +151,8 @@ def warmup(dev):
     jit_fn, args, kwargs, T, configs = _host_side(mod, dev)
 
     if configs:
-        worst = max(configs, key=lambda c: _regs_per_thread(c.kwargs["BLOCK_T"], c.num_warps))
+        # 按 shared memory 排，不是按寄存器 —— C500 上先撞上的是 smem
+        worst = max(configs, key=lambda c: _smem_bytes(c.kwargs["BLOCK_T"], c.num_stages))
         block_t = worst.kwargs["BLOCK_T"]
         num_warps, num_stages = worst.num_warps, worst.num_stages
     else:
@@ -149,8 +161,11 @@ def warmup(dev):
 
     print(f"[spill_probe] 编译最危险的 config: "
           f"BLOCK_T={block_t} num_warps={num_warps} num_stages={num_stages} "
-          f"grid=({triton.cdiv(T, block_t)},)  "
-          f"估算 ~{_regs_per_thread(block_t, num_warps):.0f} 寄存器/线程")
+          f"grid=({triton.cdiv(T, block_t)},)")
+    smem = _smem_bytes(block_t, num_stages)
+    print(f"[spill_probe] 估算 smem={smem} B (上限 {_SMEM_LIMIT} B, "
+          f"{'装得下' if smem <= _SMEM_LIMIT else '**装不下**'})，"
+          f"~{_regs_per_thread(block_t, num_warps):.0f} 寄存器/线程")
     return _compile_one(jit_fn, args, kwargs, T, block_t, num_warps, num_stages)
 
 
@@ -168,16 +183,22 @@ import torch, spill_probe as p; p.warmup_all(torch.device('cuda'))"
     rows = []
     for c in sorted(configs, key=lambda c: (c.kwargs["BLOCK_T"], c.num_warps, c.num_stages)):
         bt, nw, ns = c.kwargs["BLOCK_T"], c.num_warps, c.num_stages
-        k = _compile_one(jit_fn, args, kwargs, T, bt, nw, ns)
+        # 单个 config 装不下要继续跑完剩下的，不能整个中断 —— 这个函数的用途就是
+        # 在 run.sh 之前把整张表探一遍，看哪些能编译。
         try:
+            k = _compile_one(jit_fn, args, kwargs, T, bt, nw, ns)
             k._init_handles()
             n_regs, n_spills = k.n_regs, k.n_spills
             smem = getattr(getattr(k, "metadata", None), "shared", None)
-        except Exception as exc:      # 后端不支持读静态指标，见 check_spill.py 的说明
-            n_regs = n_spills = smem = f"<{type(exc).__name__}>"
-        rows.append((bt, nw, ns, n_regs, n_spills, smem, _regs_per_thread(bt, nw)))
+        except Exception as exc:
+            tag = "装不下" if "out of resource" in str(exc).lower() else type(exc).__name__
+            n_regs = n_spills = smem = f"<{tag}>"
+        rows.append((bt, nw, ns, n_regs, n_spills, smem,
+                     _smem_bytes(bt, ns), _regs_per_thread(bt, nw)))
 
-    print(f"{'BLOCK_T':>8} {'warps':>6} {'stages':>7} {'n_regs':>8} {'n_spills':>9} {'smem':>8} {'估算':>8}")
+    print(f"{'BLOCK_T':>8} {'warps':>6} {'stages':>7} {'n_regs':>8} {'n_spills':>9} "
+          f"{'smem':>8} {'smem估算':>9} {'regs估算':>9}")
     for r in rows:
-        print(f"{r[0]:>8} {r[1]:>6} {r[2]:>7} {str(r[3]):>8} {str(r[4]):>9} {str(r[5]):>8} {r[6]:>8.0f}")
+        print(f"{r[0]:>8} {r[1]:>6} {r[2]:>7} {str(r[3]):>8} {str(r[4]):>9} "
+              f"{str(r[5]):>8} {r[6]:>9} {r[7]:>9.0f}")
     return rows

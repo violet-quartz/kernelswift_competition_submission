@@ -152,6 +152,23 @@ def main():
     except Exception as exc:
         print(f"task={args.task}  device={dev_name}")
         print(f"\n⚠ k._init_handles() 失败：{type(exc).__name__}: {exc}")
+
+        # OutOfResources 不是"测不了"，是**确定的否定结论** —— 这个 config 的
+        # shared memory / 寄存器需求超过了硬件上限，kernel 根本编译不出来。
+        # 早先这里跟其他异常一样归到 return 2（无法判定），会让人以为是后端不支持
+        # 读指标，而实际上 triton 已经把 Required / Hardware limit 都告诉你了。
+        # 按类名判断而不是 import，因为 OutOfResources 在不同 triton 版本里的
+        # 模块路径不一致（triton.runtime.errors / triton.compiler.errors / ...）。
+        if type(exc).__name__ == "OutOfResources" or "out of resource" in str(exc).lower():
+            print("\n❌ 这不是'测不了'，是这个 config **装不下**：需求超过硬件上限。")
+            print("  典型原因是 tl.dot 的操作数要过 shared memory，且 num_stages")
+            print("  会把循环内的 load 再多缓冲 num_stages 份。对策按代价从小到大：")
+            print("    1) 调小 num_stages（1 = 不做软件流水）")
+            print("    2) 调小 BLOCK_T 之类只影响 M 维的 tile")
+            print("    3) 如果剩下的大头是与 BLOCK_T 无关的权重 tile，")
+            print("       就得在 kernel 内部再对 K/N 维分块，把 tile 本身拆小")
+            return 1
+
         print("  这个后端可能不支持读取静态资源指标，**无法判断有无溢出**。")
         return 2
 

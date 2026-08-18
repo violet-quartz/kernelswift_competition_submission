@@ -93,9 +93,9 @@ def _ks_bootstrap():
 #     浪费 54%；16 → 实算 96 行，浪费 16%）。而 8 专家的冗余循环让总算力几乎与
 #     BLOCK_T 无关，所以小 BLOCK_T 在"浪费"和"并行度"上双赢 —— 但 tl.dot 的
 #     M=16 是硬下限，在 tensor core 上可能低效。这个权衡没法推，只能测。
-#   * **num_stages**：前两道题的注释写的是"无循环，软件流水无从谈起"，本题**反过来**
-#     —— for e in range(E) 里有 3 次 global load + 3 次 tl.dot，正是软件流水的典型
-#     场景，预取下一个专家的权重能盖住访存延迟。
+#   * **num_stages**：本题有真循环（for e in range(E) 里 3 次 global load + 3 次
+#     tl.dot），本来是软件流水的典型场景 —— **但被 shared memory 卡死了，只能取 1**，
+#     见下面 [KS-SMEM]。
 #
 #   key=[]：所有 shape 都是 constexpr，没有影响性能的运行时变量，全程只调一次。
 #
@@ -107,16 +107,32 @@ def _ks_bootstrap():
 #   所以不需要 reset_to_zero / restore_value。
 # ---------------------------------------------------------------------------
 @triton.autotune(
+    # [KS-SMEM] config 表不是拍脑袋列的，是被 shared memory 上限反推出来的。
+    #
+    #   tl.dot 的操作数要经过 shared memory，num_stages 会把循环里的 load 再多
+    #   缓冲 num_stages 份，于是：
+    #
+    #       smem = BLOCK_T·H·2  +  BLOCK_T·I·2  +  3·H·I·2·num_stages
+    #              └─  x  ─┘        └─ act ─┘       └─ w1g + w1u + w2t ─┘
+    #
+    #   这个式子在 C500 上验过：BLOCK_T=64 / num_stages=2 代进去正好是 122880，
+    #   与 triton 报的 "Required: 122880, Hardware limit: 65536" 逐字节相符。
+    #
+    #   要命的是**中间那 48 KB 权重 tile 与 BLOCK_T 无关**（3 × 128×64×2），
+    #   单它就吃掉 64 KB 预算的 75%。直接后果：
+    #     * num_stages >= 2 在任何 BLOCK_T 下都装不下（光双缓冲就 96 KB）→ 只能取 1
+    #     * num_stages=1 时 BLOCK_T=16 → 54 KB ✓ ; 32 → 60 KB ✓ ; 64 → 72 KB ✗
+    #
+    #   所以只剩 BLOCK_T ∈ {16, 32}。num_warps 仍然全档扫 —— 它不占 shared memory，
+    #   只影响寄存器分配和规约树深度。
+    #
+    #   ⚠ 想把 num_stages 和大 BLOCK_T 拿回来，得先把那 48 KB 拆掉：在专家循环内部
+    #     再按 I 分块（I=64，切成 2 段就是 24 KB，4 段 12 KB），三块 tile 同步缩小。
+    #     代价是多一层循环和多一个循环携带变量。这是下一步的事，先拿到能跑的基线。
     configs=[
-        triton.Config({"BLOCK_T": bt}, num_warps=nw, num_stages=ns)
-        for bt in (16, 32, 64)
-        for nw in (4, 8)
-        for ns in (2, 3)
-    ] + [
-        # BLOCK_T=128 (grid=(1,)) 只在 num_warps 拉满时才可能不 spill：
-        # 见 spill_probe.py 里的寄存器估算。留两个点探底。
-        triton.Config({"BLOCK_T": 64}, num_warps=16, num_stages=3),
-        triton.Config({"BLOCK_T": 128}, num_warps=16, num_stages=3),
+        triton.Config({"BLOCK_T": bt}, num_warps=nw, num_stages=1)
+        for bt in (16, 32)
+        for nw in (4, 8, 16)
     ],
     key=[],
 )
