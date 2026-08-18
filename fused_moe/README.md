@@ -82,9 +82,24 @@ v1 已实现，尚未上机，暂无成绩。
 `v1/fused_moe.py` 里的 KS-SHAPE（并行形状）、KS-CACHE（权重缓存）、
 KS-TUNE（三个旋钮为什么不写死）分别对应三处设计决策。
 
-| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
-|---|---|---:|---:|---:|:---:|
-| fused_moe | MetaX C500 | 3.1371 | 0.7386 | **4.25x** | ✅ 通过 |
+| Task | 芯片 | 实现 | v0 (ms) | v1 (ms) | Speedup | 结论 |
+|---|---|---|---:|---:|---:|:---:|
+| fused_moe | MetaX C500 | **v2**（专家×token 二维分片，两 kernel）| 3.0974 | 0.1733 | **17.88x** | ✅ 通过 |
+| fused_moe | MetaX C500 | v1（token 分片，单 kernel，对照）| 3.1371 | 0.7386 | 4.25x | ✅ 通过 |
+
+v1 和 v2 都保留，共用 v0 的权重契约，可用同一口径直接对拍：
+
+```bash
+python3 bench/auto_bench.py \
+    --v0_file fused_moe/v0/fused_moe.py \
+    --v1_file fused_moe/v2/fused_moe.py
+```
+
+**v1 → v2 的 4.3 倍来自哪**：v1 的每个 program 要串行走 8 个专家、带一个循环携带的
+`[BLOCK_T, H]` fp32 累加器，寄存器溢出 `n_spills ≈ 430`；v2 每个 program 只管一个
+专家，直线代码，`n_spills` 降到 48~91，同时占用率从 3 个 program 升到 48 个。
+诊断过程记在 `v1/fused_moe.py` 的 `[KS-MEASURED]` 和 `v2/fused_moe.py` 的
+`[KS-SHAPE-V2]` 里。
 
 实测中有两条推翻了设计假设，记在 `v1/fused_moe.py` 的 `[KS-MEASURED]` 里：
 本题**不是 launch-bound**（kernel 676 us，host + launch 只有 3.8 us），

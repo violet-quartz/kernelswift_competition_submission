@@ -22,6 +22,7 @@ warmup 200 / repeat 500。这样测出来的数字可以直接和 run.sh 的结�
 用法:
     python3 bench/profile_overhead.py hc_split_sinkhorn
     python3 bench/profile_overhead.py hc_split_sinkhorn --repeat 200
+    python3 bench/profile_overhead.py fused_moe --ver v2      # 对照另一个实现版本
 """
 import argparse
 import importlib.util
@@ -43,9 +44,13 @@ def _noop_kernel(p):
     pass
 
 
-def load_v1(name: str):
-    path = ROOT / "v1" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(f"_ks_v1_{name}", path)
+def load_v1(name: str, ver: str = "v1"):
+    # 每个算子一个文件夹：ROOT/<name>/<ver>/<name>.py
+    # （早先仓库是扁平布局 ROOT/v1/<name>.py，这里跟着改过了，别改回去。）
+    path = ROOT / name / ver / f"{name}.py"
+    if not path.is_file():
+        raise SystemExit(f"{path} 不存在")
+    spec = importlib.util.spec_from_file_location(f"_ks_{ver}_{name}", path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -83,6 +88,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("task")
+    ap.add_argument("--ver", default="v1",
+                    help="要profile 的实现版本目录名，默认 v1；对照用 --ver v2")
     ap.add_argument("--warmup", type=int, default=200)
     ap.add_argument("--repeat", type=int, default=500)
     args = ap.parse_args()
@@ -91,7 +98,7 @@ def main():
     dev = torch.device(dev_name)
     sync = dev_mod.synchronize
 
-    mod = load_v1(args.task)
+    mod = load_v1(args.task, args.ver)
     model = mod.ModelNew(*(mod.get_init_inputs() or []))
     if hasattr(model, "to"):
         model = model.to(dev)
@@ -99,7 +106,7 @@ def main():
     inputs = [x.to(dev) if isinstance(x, torch.Tensor) else x
               for x in (mod.get_inputs() or [])]
 
-    print(f"task={args.task}  device={dev_name}  warmup={args.warmup} repeat={args.repeat}")
+    print(f"task={args.task}  ver={args.ver}  device={dev_name}  warmup={args.warmup} repeat={args.repeat}")
     print("口径与 auto_bench.py L429-445 一致（每次调用后 sync，取 median）\n")
 
     rows = []
