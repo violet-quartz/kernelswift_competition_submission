@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""跑一次真实 forward，报告 autotune 选中了哪个 config，然后逐个 config 单独计时。
+"""报告 autotune 选中了哪个 config，并（单 kernel 版本时）逐个 config 单独计时。
 
-    python3 fused_moe/scratch/which_config.py
+    python3 fused_moe/scratch/which_config.py          # 默认 v1
+    python3 fused_moe/scratch/which_config.py v2       # v2
 
 为什么需要它：@triton.autotune 的 benchmark 结果是局部变量，跑完就丢了，
 Autotuner 上只留下 .best_config / .cache（赢家），看不到「赢了多少」。
 而判断要不要继续优化，需要的恰恰是全表的分布 —— 如果第一名和最后一名差 5%，
 说明旋钮已经调到头了，瓶颈在别处；差 3 倍就还有得挖。
+
+v1 是单 kernel，能做完整的逐 config 计时；v2 拆成 expert + reduce 两个 kernel，
+config 是叉乘关系，这里只报告各自的赢家和端到端耗时。
 """
 import importlib.util
 import sys
@@ -19,18 +23,28 @@ import triton.testing
 OP_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_v1():
-    path = OP_DIR / "v1" / "fused_moe.py"
-    spec = importlib.util.spec_from_file_location("_ks_v1_fused_moe_which", path)
+def _load(ver):
+    path = OP_DIR / ver / "fused_moe.py"
+    spec = importlib.util.spec_from_file_location(f"_ks_{ver}_fused_moe_which", path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
 
 
+def _autotuners(mod):
+    """模块里所有挂了 @triton.autotune 的 kernel，按定义顺序。"""
+    found = []
+    for name, obj in vars(mod).items():
+        if hasattr(obj, "configs") and hasattr(obj, "best_config") and hasattr(obj, "fn"):
+            found.append((name, obj))
+    return found
+
+
 def main():
+    ver = sys.argv[1] if len(sys.argv) > 1 else "v1"
     dev = torch.device("cuda")
-    mod = _load_v1()
+    mod = _load(ver)
 
     model = mod.ModelNew(*mod.get_init_inputs()).to(dev)
     hidden_states, router_logits = (t.to(dev) for t in mod.get_inputs())
@@ -40,18 +54,23 @@ def main():
         out = model(hidden_states, router_logits)
     torch.cuda.synchronize()
 
-    kernel = mod._fused_moe_kernel
-    print("=" * 68)
-    print("autotune 选中的 config:", kernel.best_config)
-    for k, v in getattr(kernel, "cache", {}).items():
-        print(f"  cache[{k!r}] = {v}")
+    tuners = _autotuners(mod)
+    print("=" * 72)
+    print(f"版本 {ver} —— {len(tuners)} 个挂了 autotune 的 kernel")
+    for name, k in tuners:
+        print(f"  {name}: {k.best_config}")
 
-    # --- 2. 端到端计时（含 host 侧和 autotune 的 dict 查找）---
+    # --- 2. 端到端计时 ---
     with torch.no_grad():
         ms = triton.testing.do_bench(lambda: model(hidden_states, router_logits))
-    print(f"\n端到端 forward（走 autotune 包装层）: {ms * 1000:.1f} us")
+    print(f"\n端到端 forward: {ms * 1000:.1f} us")
 
-    # --- 3. 逐 config 单独计时，绕开 autotune 直接 launch ---
+    if len(tuners) != 1:
+        print("\n（多 kernel 版本，config 是叉乘关系，跳过逐 config 计时。)")
+        return
+
+    # --- 3. 单 kernel 版本：逐 config 单独 launch 计时，绕开 autotune 包装层 ---
+    _, kernel = tuners[0]
     jit_fn = kernel.fn
     T, H = hidden_states.shape
     x = hidden_states.contiguous()
@@ -74,7 +93,6 @@ def main():
             call()
             torch.cuda.synchronize()
             us = triton.testing.do_bench(call) * 1000
-            # 顺便确认这个 config 算得对
             ok = torch.allclose(buf.float(), out.float(), atol=1e-2, rtol=1e-2)
         except Exception as exc:
             us, ok = float("nan"), f"<{type(exc).__name__}>"
@@ -85,7 +103,6 @@ def main():
     for bt, nw, ns, us, ok in rows:
         rel = f"{us / best:.2f}x" if us == us else "—"
         print(f"{bt:>8} {nw:>6} {ns:>7} {us:>10.1f} {rel:>9}  {ok}")
-
     print(f"\n最快 kernel: {best:.1f} us   端到端: {ms * 1000:.1f} us"
           f"   → 差值 {ms * 1000 - best:.1f} us 是 host 侧 + launch 开销")
 

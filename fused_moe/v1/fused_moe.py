@@ -36,17 +36,24 @@ def _ks_bootstrap():
 
 # ---------------------------------------------------------------------------
 # [KS-SHAPE] 并行形状：grid = (cdiv(T, BLOCK_T),)，每个 program 独占一批 token，
-#            内部 `for e in range(E)` 走遍全部 8 个专家。
+#            内部 `tl.static_range(E)` 走遍全部 8 个专家。
 #
 #   为什么是这个形状：
 #     * **输出按 token 分片，每行只有唯一一个 program 会写** —— 不需要 atomic，
 #       也不需要第二个 kernel 做 top_k 规约。路由 + dispatch + 规约全在一次
-#       launch 里完成。这题的 v1 时间基本就是 launch 地板（仓库里 grouped_topk
-#       / hc_split_sinkhorn / music_flamingo 都停在 0.109~0.112 ms），
-#       所以「只 launch 一次」比「算得多快」重要得多。
-#     * 反过来，按专家分片（grid=(E,)）会让同一个 token 的 2 个专家落在不同
-#       program 里，输出必然相撞 → 要 atomic_add；fp16 atomic 在沐曦/昇腾后端
-#       上不保险，退成 fp32 就得再加一次 .to(fp16)，那是第二次 launch。不划算。
+#       launch 里完成。
+#
+#   ⚠ 【这一节的原始论据已被实测推翻，保留在此以免重复踩坑】
+#     选这个形状时的理由是「本题必然 launch-bound，所以只 launch 一次压倒一切，
+#     按专家分片(grid=(E,))要付的 atomic + 第二个 kernel 不划算」。C500 实测：
+#
+#         kernel 本身 676 us，host + launch 合计只有 3.8 us
+#
+#     **完全不是 launch-bound**（仓库里其他题 0.11 ms 的地板在这道题不适用 ——
+#     那些 kernel 的计算量是零头，这个不是）。第二次 launch 只值 ~4 us，占比 0.6%，
+#     所以 grid=(E, ...) + fp32 中间缓冲 + 第二个规约 kernel 的方案重新变得可行，
+#     而且它能同时解决占用率（3 个 program → 24 个）和寄存器压力（无专家循环）。
+#     详见 results/ 里的记录。
 #
 #   代价：每个 program 都要过完 8 个专家，冗余系数约 6×（有用的只有 8.2 MFLOP，
 #   实际算 ~50 MFLOP）。但这题算力本来就是零头，用冗余换掉 atomic 和第二次
@@ -93,9 +100,8 @@ def _ks_bootstrap():
 #     浪费 54%；16 → 实算 96 行，浪费 16%）。而 8 专家的冗余循环让总算力几乎与
 #     BLOCK_T 无关，所以小 BLOCK_T 在"浪费"和"并行度"上双赢 —— 但 tl.dot 的
 #     M=16 是硬下限，在 tensor core 上可能低效。这个权衡没法推，只能测。
-#   * **num_stages**：本题有真循环（for e in range(E) 里 3 次 global load + 3 次
-#     tl.dot），本来是软件流水的典型场景 —— **但被 shared memory 卡死了，只能取 1**，
-#     见下面 [KS-SMEM]。
+#   * **num_stages**：被 shared memory 卡死，只能取 1（见 [KS-SMEM]）。既然流水
+#     做不成，专家循环也就没必要保持成真循环了，已改用 tl.static_range 全展开。
 #
 #   key=[]：所有 shape 都是 constexpr，没有影响性能的运行时变量，全程只调一次。
 #
@@ -105,6 +111,35 @@ def _ks_bootstrap():
 #   重复执行是安全的：autotune 会拿同一个 out 缓冲区把 kernel 跑很多遍，而本 kernel
 #   对 out 是**纯覆盖写**（每个有效行的全部 H 列都被 store），没有读改写，
 #   所以不需要 reset_to_zero / restore_value。
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# [KS-MEASURED] C500 实测数据（2026-08-18），记下来是因为其中两条推翻了设计时的假设
+#
+#   成绩：3.1371 -> 0.7386 ms，4.25x
+#
+#   1. **不是 launch-bound**。逐 config 直接 launch 计时：最快的 kernel 676.1 us，
+#      端到端 679.8 us —— host + launch 只占 3.8 us（0.6%）。设计 [KS-SHAPE] 时
+#      假定的"launch 地板压倒一切"完全不成立。
+#
+#   2. **旋钮已经调到头**，六个 config 的差距只有 1.79x，且趋势与直觉相反：
+#           BLOCK_T  warps   us
+#                32      4  676.1   <- autotune 选中
+#                16      4  705.2
+#                32      8  736.4
+#                32     16  759.7
+#                16      8  804.2
+#                16     16 1212.4
+#      num_warps 越大越慢（M 维只有 16/32，摊到 16 个 warp 上 MMA 分解太碎），
+#      所以 [KS-TUNE] 里"线程是寄存器扩容手段"那条推理在本题不适用。
+#
+#   3. **寄存器溢出成因未定位**。六个 config 的 n_regs 全部钉死 256（架构上限，
+#      不含信息），n_spills 都在 418~443，对 BLOCK_T（16 vs 32，tile 翻倍）和
+#      num_warps（4 vs 16，线程数 4 倍）**都不敏感**。按 tile/线程数 的模型完全
+#      解释不了 —— 那个模型预测 num_warps=16 应该把压力压到 1/4。
+#      spill_probe.py 里的 _regs_per_thread 估算式因此不可信，别拿它做决策。
+#
+#   4. 占用率极低：grid=(3,)，只用到 104 个 CU 中的 3 个。但 BLOCK_T=16（6 个
+#      program）反而更慢，说明占用率不是当前的绑定约束。
 # ---------------------------------------------------------------------------
 @triton.autotune(
     # [KS-SMEM] config 表不是拍脑袋列的，是被 shared memory 上限反推出来的。
@@ -190,14 +225,12 @@ def _fused_moe_kernel(
 
     acc = tl.zeros((BLOCK_T, H), dtype=tl.float32)      # [BLOCK_T, H]
 
-    # 这里刻意用 range 而不是 tl.static_range：static_range 会完全展开，展开后
-    # 就没有循环给 num_stages 做软件流水了，[KS-TUNE] 里调 num_stages 也就白调。
-    # 上面的路由循环相反 —— TOP_K=2，展开更划算，所以那边用 static_range。
+    # 用 static_range 全展开。原先写的是 range（想留个真循环给 num_stages 做软件
+    # 流水），但 num_stages 已经被 shared memory 否掉只能取 1，那个理由不成立了；
+    # 实测展开更快：C500 上 0.7910 -> 0.7386 ms（3.93x -> 4.25x），约 +7%。
     #
-    # ⚠ 代价：本循环带一个循环携带变量 acc。music_flamingo 那题的 spill_probe
-    #   记过「沐曦的 make_ttgir 段错误对循环携带变量敏感」。真在 C500 上编译崩了，
-    #   退路是改成 tl.static_range(E) 全展开，同时把 [KS-TUNE] 里 num_stages 的
-    #   候选砍掉（展开后它没有作用）。
+    # 注意展开**没有**减少寄存器溢出 —— 6 个 config 的 n_spills 都在 418~443，
+    # 对 BLOCK_T 和 num_warps 都不敏感。溢出的成因至今未定位，见下方 [KS-MEASURED]。
     for e in tl.static_range(E):
         # Triton 不能用运行时标量下标索引张量，所以用 where + reduce 抽出第 e 列。
         w_e = tl.sum(tl.where(offs_e[None, :] == e, gate_w, 0.0), axis=1)   # [BLOCK_T]

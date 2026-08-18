@@ -84,4 +84,9 @@ KS-TUNE（三个旋钮为什么不写死）分别对应三处设计决策。
 
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
-| fused_moe | MetaX C500 | — | — | — | — |
+| fused_moe | MetaX C500 | 3.1371 | 0.7386 | **4.25x** | ✅ 通过 |
+
+实测中有两条推翻了设计假设，记在 `v1/fused_moe.py` 的 `[KS-MEASURED]` 里：
+本题**不是 launch-bound**（kernel 676 us，host + launch 只有 3.8 us），
+而且六个 autotune config 的差距只有 1.79x —— 旋钮已经调到头，还剩的空间在结构上。
+`fused_moe/scratch/which_config.py` 可复现这两组数据。
