@@ -21,12 +21,10 @@
   "results": [
     {
       "name": "SPLADE_sparse_pooler",
-      "wall_s": 14.7,
-      "raw_output": "PASS accuracy; v0=0.688181 ms, v1=0.470675 ms, speedup=1.462x\n\nSummary: 1 passed, 0 failed, 1 total.",
-      "status": "pass",
-      "v0_ms": 0.688181,
-      "v1_ms": 0.470675,
-      "speedup": 1.462
+      "wall_s": 13.0,
+      "raw_output": "FAIL /root/kernelswift_competition_submission/SPLADE_sparse_pooler/v0/SPLADE_sparse_pooler.py: v1 forward failed: name '_GEMM_DTYPE' is not defined\n\nSummary: 0 passed, 1 failed, 1 total.",
+      "status": "fail",
+      "message": "/root/kernelswift_competition_submission/SPLADE_sparse_pooler/v0/SPLADE_sparse_pooler.py: v1 forward failed: name '_GEMM_DTYPE' is not defined"
     }
   ]
 }
