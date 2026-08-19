@@ -29,6 +29,8 @@
     ├── v0/fused_moe.py               torch 参考实现（Model）—— 加速比的基准
     ├── v1/fused_moe.py               Triton 优化实现（ModelNew）—— 参赛作品
     ├── spill_probe.py                本题的 spill 探针，供 bench/check_spill.py 调用
+    ├── scratch/                      一次性诊断脚本，不参与评测
+    │   └── which_config.py           报告 autotune 选中了哪个 config + 分 kernel 计时
     └── results/                      性能测试结果
 ```
 
@@ -82,26 +84,37 @@ v1 已实现，尚未上机，暂无成绩。
 `v1/fused_moe.py` 里的 KS-SHAPE（并行形状）、KS-CACHE（权重缓存）、
 KS-TUNE（三个旋钮为什么不写死）分别对应三处设计决策。
 
-| Task | 芯片 | 实现 | v0 (ms) | v1 (ms) | Speedup | 结论 |
-|---|---|---|---:|---:|---:|:---:|
-| fused_moe | MetaX C500 | **v2**（专家×token 二维分片，两 kernel）| 3.0974 | 0.1733 | **17.88x** | ✅ 通过 |
-| fused_moe | MetaX C500 | v1（token 分片，单 kernel，对照）| 3.1371 | 0.7386 | 4.25x | ✅ 通过 |
+| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
+|---|---|---:|---:|---:|:---:|
+| fused_moe | MetaX C500 | 3.0974 | 0.1733 | **17.88x** | ✅ 通过 |
 
-v1 和 v2 都保留，共用 v0 的权重契约，可用同一口径直接对拍：
+### 实现要点
+
+`grid = (E, cdiv(T, BLOCK_T))`，每个 program 只管**一个专家 × 一批 token**，
+是三次 load、三次 `tl.dot`、一次 store 的直线代码。跨专家规约不用 atomic ——
+每个 program 写进 `partial[E, T, H]` fp32 里自己独占的一片，再由第二个 kernel
+沿 E 求和并转 fp16。权重在首次 forward 时一次性预转置 + 预降精度并缓存，
+kernel 里零 `tl.trans`、零 dtype 转换。
+
+四块设计决策记在 `v1/fused_moe.py` 的注释里：`[KS-SHAPE]`（并行形状，含被实测
+否掉的那个形状及其数据）、`[KS-SMEM]`（shared memory 预算怎么定 BLOCK_T 上限）、
+`[KS-TUNE]`（三个旋钮为什么不写死）、`[KS-CACHE]`（权重预处理与缓存失效判据）。
+
+### 诊断工具
 
 ```bash
-python3 bench/auto_bench.py \
-    --v0_file fused_moe/v0/fused_moe.py \
-    --v1_file fused_moe/v2/fused_moe.py
+python3 bench/check_spill.py fused_moe          # n_regs / n_spills
+python3 bench/profile_overhead.py fused_moe     # 拆固定开销（launcher / autotune / 分配）
+python3 fused_moe/scratch/which_config.py       # autotune 选了哪个 config + 分 kernel 计时
 ```
 
-**v1 → v2 的 4.3 倍来自哪**：v1 的每个 program 要串行走 8 个专家、带一个循环携带的
-`[BLOCK_T, H]` fp32 累加器，寄存器溢出 `n_spills ≈ 430`；v2 每个 program 只管一个
-专家，直线代码，`n_spills` 降到 48~91，同时占用率从 3 个 program 升到 48 个。
-诊断过程记在 `v1/fused_moe.py` 的 `[KS-MEASURED]` 和 `v2/fused_moe.py` 的
-`[KS-SHAPE-V2]` 里。
+### 已知的、尚未做的优化
 
-实测中有两条推翻了设计假设，记在 `v1/fused_moe.py` 的 `[KS-MEASURED]` 里：
-本题**不是 launch-bound**（kernel 676 us，host + launch 只有 3.8 us），
-而且六个 autotune config 的差距只有 1.79x —— 旋钮已经调到头，还剩的空间在结构上。
-`fused_moe/scratch/which_config.py` 可复现这两组数据。
+按实测收益排序（数据来自 `bench/profile_overhead.py`，完整 forward 155.8 µs）：
+
+1. **摘掉 autotune、把赢家写死**：Autotuner 包装层每次调用约 15.3 µs，两个 kernel
+   共 ~30 µs（20%）。代价是绑死芯片 —— 换机器要重新跑 `which_config.py` 填值。
+2. **合并两个 kernel**：每多一次 launch 的边际成本 23.9 µs。但规约必须等所有专家
+   算完，目前没有干净解法（fp16 atomic 要先清零 `out`，那又是一次 launch）。
+3. **`partial[E,T,H]` → `partial[TOP_K,T,H]`**：8 片里只有 2 片非零。改按**排名**
+   而不是专家编号索引，每个槽位仍恰好被一个 program 写一次，traffic 降 4 倍。

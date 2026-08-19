@@ -58,7 +58,6 @@ v1 的 kernel 挂了 @triton.autotune，有十几个 config。本探针**故意�
 要挨个看全部 config，用 warmup_all(dev)（本模块提供，通用驱动不会调）。
 """
 import importlib.util
-import os
 import sys
 from pathlib import Path
 
@@ -91,14 +90,9 @@ def _regs_per_thread(block_t, num_warps):
     return (_SLOTS_FLOOR + _SLOTS_PER_BLOCK_T * block_t) / (num_warps * _WARP_SIZE)
 
 
-# 哪个版本：默认 v1，用环境变量切到 v2 做对照
-#     KS_FUSED_MOE_VER=v2 python3 bench/check_spill.py fused_moe
-_VER = os.environ.get("KS_FUSED_MOE_VER", "v1")
-
-
 def _load_v1():
-    path = OP_DIR / _VER / "fused_moe.py"
-    spec = importlib.util.spec_from_file_location(f"_ks_{_VER}_fused_moe_spillprobe", path)
+    path = OP_DIR / "v1" / "fused_moe.py"
+    spec = importlib.util.spec_from_file_location("_ks_v1_fused_moe_spillprobe", path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -110,9 +104,9 @@ def _host_side(mod, dev):
 
     kernel.warmup() 只编译、不执行，所以传的张量不需要有意义的数值。
     """
-    # v1 是单 kernel（_fused_moe_kernel）；v2 拆成两个，主 kernel 是
-    # _moe_expert_kernel（规约那个没有 tl.dot，不占 shared memory，不必查）。
-    kernel = getattr(mod, "_moe_expert_kernel", None) or mod._fused_moe_kernel
+    # 只查 _moe_expert_kernel：规约那个 kernel 没有 tl.dot，不占 shared memory，
+    # 也没有大 tile，不是风险点。
+    kernel = mod._moe_expert_kernel
     # 挂了 autotune 之后 kernel 是 Autotuner 而不是 JITFunction，
     # .fn 才是能接受显式 BLOCK_T / num_warps 的那一层。
     jit_fn = getattr(kernel, "fn", kernel)
@@ -129,11 +123,8 @@ def _host_side(mod, dev):
     # 预转置 + 预降精度的权重，跟 forward 里走同一条路径（见 [KS-CACHE]）
     w1t, w2t = model._prepared_weights(x.dtype)
 
-    if _VER == "v1":
-        sink = torch.empty((T, H), dtype=x.dtype, device=dev)                  # out
-    else:
-        sink = torch.empty((model.num_experts, T, H), dtype=torch.float32,
-                           device=dev)                                          # partial
+    # expert kernel 写的是 partial[E, T, H] fp32，不是最终输出
+    partial = torch.empty((model.num_experts, T, H), dtype=torch.float32, device=dev)
 
     kwargs = dict(
         E=model.num_experts,
@@ -142,7 +133,7 @@ def _host_side(mod, dev):
         TOP_K=model.top_k,
         RENORM=model.renormalize,
     )
-    return jit_fn, (x, logits, w1t, w2t, sink, T), kwargs, T, configs
+    return jit_fn, (x, logits, w1t, w2t, partial, T), kwargs, T, configs
 
 
 def _compile_one(jit_fn, args, kwargs, T, block_t, num_warps, num_stages):
@@ -155,8 +146,7 @@ def _compile_one(jit_fn, args, kwargs, T, block_t, num_warps, num_stages):
         BLOCK_T=block_t,
         num_warps=num_warps,
         num_stages=num_stages,
-        grid=((triton.cdiv(T, block_t),) if _VER == "v1"
-              else (kwargs["E"], triton.cdiv(T, block_t))),
+        grid=(kwargs["E"], triton.cdiv(T, block_t)),
     )
 
 
@@ -174,7 +164,7 @@ def warmup(dev):
         # v1 万一哪天摘掉了 autotune，退回一组保守默认值，探针仍然可用
         block_t, num_warps, num_stages = 32, 4, 2
 
-    print(f"[spill_probe] 版本={_VER}  编译最危险的 config: "
+    print(f"[spill_probe] 编译最危险的 config: "
           f"BLOCK_T={block_t} num_warps={num_warps} num_stages={num_stages} "
           f"grid=({triton.cdiv(T, block_t)},)")
     smem = _smem_bytes(block_t, num_stages)

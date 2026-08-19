@@ -183,16 +183,29 @@ def main():
         prev = ms
     print("-" * (w + 22))
 
-    floor, noop_k, alloc, full_ms = (r[1] for r in rows)
+    # 按标签取，别按位置解包 —— 加一行探针就会把位置解包整个打散。
+    by = {label: ms for label, ms in rows}
+    floor = by["① 空函数 + sync（测量框架地板）"]
+    noop_k = by["② + 空 kernel launch"]
+    noop_2 = by["②b + 两次空 kernel launch"]
+    noop_at = by["②c + 空 kernel launch（带 autotune）"]
+    alloc = next(ms for label, ms in rows if label.startswith("③"))
+    full_ms = next(ms for label, ms in rows if label.startswith("④"))
+
+    us = lambda x: x * 1e3
     print(f"\n解读:")
-    print(f"  框架地板（空函数+sync）      : {floor * 1e3:>7.1f} µs   —— 不可压缩")
-    print(f"  Triton launcher 净开销       : {(noop_k - floor) * 1e3:>7.1f} µs")
-    print(f"  输出分配净开销               : {(alloc - floor) * 1e3:>7.1f} µs")
-    print(f"  kernel 本体 + 其余 python    : "
-          f"{(full_ms - noop_k - (alloc - floor)) * 1e3:>7.1f} µs   （粗略差值，仅供定位）")
-    print(f"  完整 forward                 : {full_ms * 1e3:>7.1f} µs")
-    print(f"\n  哪一项最大，就先优化哪一项。若 Triton launcher 占大头，")
-    print(f"  这是所有 6 道题共用的分母，优化一次全盘受益。")
+    print(f"  框架地板（空函数+sync）        : {us(floor):>7.1f} µs   —— 不可压缩")
+    print(f"  首次 launch 净开销             : {us(noop_k - floor):>7.1f} µs")
+    print(f"  **每多一次 launch 的边际成本** : {us(noop_2 - noop_k):>7.1f} µs"
+          f"   ← 合并 kernel 能省的就是这个")
+    print(f"  **autotune 包装层（每次调用）** : {us(noop_at - noop_k):>7.1f} µs"
+          f"   ← 调完把赢家写死就能省掉")
+    print(f"  输出分配净开销                 : {us(alloc - floor):>7.1f} µs")
+    print(f"  kernel 本体 + 其余 python      : "
+          f"{us(full_ms - noop_k - (alloc - floor)):>7.1f} µs   （粗略差值，仅供定位）")
+    print(f"  完整 forward                   : {us(full_ms):>7.1f} µs")
+    print(f"\n  哪一项最大，就先优化哪一项。launcher 相关的三项是所有题共用的分母，")
+    print(f"  优化一次全盘受益；kernel 本体那项才是本题特有的。")
 
 
 if __name__ == "__main__":
