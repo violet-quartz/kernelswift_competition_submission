@@ -21,12 +21,12 @@
   "results": [
     {
       "name": "fused_moe",
-      "wall_s": 138.5,
-      "raw_output": "Triton autotuning for function _fused_moe_kernel finished after 123.72s; best config selected: BLOCK_T: 32, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None;\nPASS accuracy; v0=3.137067 ms, v1=0.738607 ms, speedup=4.247x\n\nSummary: 1 passed, 0 failed, 1 total.",
+      "wall_s": 16.9,
+      "raw_output": "Triton autotuning for function _moe_expert_kernel finished after 1.58s; best config selected: BLOCK_T: 32, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None;\nTriton autotuning for function _moe_reduce_kernel finished after 0.55s; best config selected: BLOCK_T: 32, num_warps: 8, num_ctas: 1, num_stages: 1, maxnreg: None;\nPASS accuracy; v0=3.020563 ms, v1=0.171804 ms, speedup=17.581x\n\nSummary: 1 passed, 0 failed, 1 total.",
       "status": "pass",
-      "v0_ms": 3.137067,
-      "v1_ms": 0.738607,
-      "speedup": 4.247
+      "v0_ms": 3.020563,
+      "v1_ms": 0.171804,
+      "speedup": 17.581
     }
   ]
 }
