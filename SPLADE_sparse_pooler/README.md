@@ -64,48 +64,62 @@ bash run.sh --only SPLADE_sparse_pooler
 
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
-| SPLADE_sparse_pooler | MetaX C500 | 0.6882 | 0.4707 | **1.46x** | ✅ 通过 |
+| SPLADE_sparse_pooler | MetaX C500 | 0.6613 | 0.2632 | **2.51x** | ✅ 通过 |
 
 由 `bash run.sh --only SPLADE_sparse_pooler` 产出，原始数据见
 `results/cuda-MetaX_C500/{RESULTS.md,results.json}`（2026-08-19）。
 
-### 当前实现（保底路线）
+### 实现要点
 
-本题是所有算子里唯一撞访存 roofline 的：`decoder.weight` 是 30522×768×4B =
-**93.8 MB**，每次 forward 必读一遍，按沐曦实测 382 GB/s 的有效带宽，**光这一项
-就是 ~245 µs 的地板**。
+本题是所有算子里唯一撞访存 roofline 的：`decoder.weight` 30522×768，fp32 下
+**89.4 MB**，每次 forward 必读一遍。所以两刀都砍在字节数上，而不是结构上。
 
-所以 MLM head（`dense → GELU → LayerNorm → decoder`）保持 torch 不动 ——
-厂商 GEMM 本来就最优 —— 只用一个 Triton kernel 融合 `log1p(relu(x))` + 分段
-pooling。收益来自三处：
+**一、`decoder` 走 fp16**（`[KS-FP16]`）。权重和中间张量同步减半，还能吃 tensor core。
+`dense / GELU / LayerNorm` 保持 fp32 —— 它们合计只有 30 µs，而 LayerNorm 在 fp16 下
+算方差容易掉精度，不值得。权重用惰性缓存（`_decoder_weights`），沿用 fused_moe 的
+`[KS-CACHE]` 手法：`_version` 做失效判据、裸属性不用 `register_buffer`。
+实测精度 max |Δ| = 6.0e-4，对 `allclose(atol=1e-2, rtol=1e-2)` 的余量 29 倍。
 
-* 干掉 `seq_lens.tolist()` 这**一次 host 同步**（v0 L110）。段边界 `[offset, offset+L)`
-  改在 kernel 里从 `seq_lens` 现算前缀和；host 侧只用到 `seq_lens.shape[0]`，
-  取形状不需要同步。
-* 干掉 pooling 那个 4 次迭代的 Python 循环（4 次 kernel 启动 → 1 次）。
-* `[83, 30522]` fp32（9.7 MB）只读一遍就出结果，而不是 `relu`/`log1p` 各写读一遍。
+**二、一个 Triton kernel 融合 `log1p(relu(x))` + 分段 pooling**。收益来自干掉
+`seq_lens.tolist()` 这一次 host 同步（段边界改在 kernel 里算前缀和）、干掉 pooling
+的 4 次 Python 迭代、以及中间张量只读一遍。用到一条等价性：**`log1p(relu(·))`
+单调不减，单调函数与 max 可交换**，所以 `max` 分支先在原始 logits 上规约、最后只对
+`[BLOCK_V]` 个结果激活一次。⚠ 这条**只对 `pooling="max"` 成立**。
 
-用到一条等价性：**`log1p(relu(·))` 单调不减，而单调函数与 max 可交换**，
-所以 `max` 分支先在原始 logits 上规约、最后只对 `[BLOCK_V]` 个结果激活一次，
-逐元素运算量降到 1/L（18~25 倍）。⚠ 这条**只对 `pooling="max"` 成立**，
-`sum` 与非线性不可交换（实测差值可达 7.5），所以两支的代码路径不同。
+### 逐步耗时（`scratch/breakdown.py`，口径同 auto_bench）
+
+```
+              净增      roofline   效率
+dense        7.7 µs      6.8 µs     88%
+GELU         7.8 µs      0.7 µs      9%
+LayerNorm   14.2 µs      0.7 µs      5%
+decoder    126.2 µs    136.2 µs    108%   <- 贴着带宽，做完了
+pool        24.0 µs     14.5 µs     61%
+合计       246.7 µs（含 ~67 µs 固定开销）
+```
+
+优化前 `decoder` 是 327.7 µs / 效率 83%，fp16 后降到 126.2 µs 且超过 100%
+（超 100% = 部分命中 cache，382 GB/s 这个分母对它偏保守）。
 
 ### 已知的、尚未做的优化
 
-v1 = 470.7 µs，离 245 µs 的 roofline 地板还有 1.9 倍，剩下的空间在这两处：
+剩下的空间不大，合计约 30 µs（12%）：
 
-1. **`decoder.weight` 预降 fp16 并缓存**（沿用 fused_moe 的 `[KS-CACHE]` 手法）。
-   访存 93.8 MB → 46.9 MB，地板 245 µs → ~123 µs，中间张量也同步减半，
-   还能吃上 tensor core。精度粗估：LN 之后 h ~ N(0,1)，decoder 输出量级约 0.6，
-   fp16 相对精度 1e-3 → 绝对误差 ~6e-4，`log1p` 在该处斜率 0.63，`max` 不放大，
-   离 `atol=1e-2` 有一个数量级余量 —— **但这是估算，必须实测**。
-2. **减少 kernel 启动次数**。当前 `dense / GELU / LayerNorm / decoder / pool` 是
-   5 次启动。参考 fused_moe 在同一台机器上实测的数字（首次 launch 净 49.9 µs、
-   每多一次边际 23.9 µs），这一项可能占了相当大的比例 ——
-   先跑 `python3 bench/profile_overhead.py SPLADE_sparse_pooler` 确认，再决定
-   值不值得做全融合。
+1. **把 `GELU + LayerNorm` 融成一个 Triton kernel**，顺带在 epilogue 里直接输出
+   fp16（省掉 `h.to(fp16)` 那次单独的 cast）。这两步现在是 22 µs 而 roofline 只有
+   1.4 µs（效率 5~9%），是全表最不划算的一段 —— 多半是 torch 把 LayerNorm 拆成了
+   mean/var + normalize 好几个 kernel。预期省 ~18 µs。
+   `dense` 不动（88% 效率，torch 的 GEMM 已经很好）。
+2. **pool kernel 61% -> 更高**，最多再省 ~10 µs。
+3. 固定开销 ~67 µs 里，首次 launch 的 48 µs 是每次 forward 都要付的，压不掉。
 
-   全融合的设计记在 `v1/SPLADE_sparse_pooler.py` 的 `[KS-PLAN]` 注释里，两个关键点：
-   grid 要按 `(V块,)` 切**让一个 program 覆盖全部 4 条序列**（否则 `decoder.weight`
-   被 4 个 program 各读一遍，89.5 MB 变 358 MB）；LayerNorm 沿 768 整行规约是天然的
-   program 间依赖，所以 `dense+GELU+LN` 必须是另一个**不切 N** 的 kernel。
+### 踩过的坑
+
+* **模块级赋值的右侧必须是字面量**。写 `_GEMM_DTYPE = torch.float16` 会被
+  `auto_bench.py` L74 的 `_filter_module_ast()` **静默丢弃**（`torch.float16` 是
+  `ast.Attribute` 不是 `ast.Constant`），表现为运行时
+  `name '_GEMM_DTYPE' is not defined`。改用 bool 字面量开关、dtype 在方法体里解析。
+* **输出 dtype 要跟 `hidden_states` 而不是跟中间张量**。`x` 现在是 fp16，而 v0 返回
+  fp32，`torch.allclose` 要求 dtype 一致。
+* **`scratch/breakdown.py` 的分步必须逐字复刻 forward 的实际链路**，否则累计值
+  不单调、净增出负数（改了 forward 忘了改脚本，出现过 -123.8 µs）。

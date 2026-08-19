@@ -224,7 +224,7 @@ class ModelNew(nn.Module):
     def forward(self, hidden_states: torch.Tensor, seq_lens: torch.Tensor) -> list:
         # hidden_states: [83, 768] float32   seq_lens: [4] int32，和为 83
         #
-        # dense / GELU / LayerNorm 保持 fp32 —— 它们合计只有 33 µs，而 LayerNorm
+        # dense / GELU / LayerNorm 保持 fp32 —— 它们合计只有 30 µs，而 LayerNorm
         # 在 fp16 下算方差容易掉精度，不值得冒险（见 [KS-FP16]）。
         h = self.layer_norm(self.act(self.dense(hidden_states)))     # [T, H] fp32
 
