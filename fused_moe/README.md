@@ -100,18 +100,27 @@ python3 fused_moe/scratch/which_config.py       # autotune 选了哪个 config +
 
 ### 已知的、尚未做的优化
 
-按实测收益排序（数据来自 `bench/profile_overhead.py`，完整 forward 155.8 µs）：
+⚠ **本节的 launcher 数字已修正。** 早先这里写的是「每多一次 launch 23.9 µs、
+autotune 包装层 15.3 µs」，据此把「摘掉 autotune」排在第一位。那组数是异常值：
+`bench/profile_overhead.py` 的 ①②②b②c 四行测的是**与 task 无关**的空 kernel，
+在同一台 C500 上跑 SPLADE_sparse_pooler 两次都得到
 
-1. **摘掉 autotune、把赢家写死**：Autotuner 包装层每次调用约 15.3 µs，两个 kernel
-   共 ~30 µs（20%）。
+    首次 launch 净开销   ~48 µs   （与本题那次一致）
+    每多一次 launch       3.7 µs   ← 不是 23.9
+    autotune 包装层       4.7 µs   ← 不是 15.3
 
-   ⚠ 但**赢家在两次运行之间会变**：同一台 C500 上，一次选出
-   `_moe_expert_kernel: BLOCK_T=16, num_warps=2`，另一次选出 `BLOCK_T=32, num_warps=4`
-   （见 `results.json` 的 `raw_output` 与 `scratch/which_config.py` 的输出）。
-   这与逐 config 计时看到的「全表只差 1.79x」一致 —— config 之间差距太小，
-   噪声就能决定名次。所以写死之前得先搞清楚到底哪个更快、还是根本无所谓；
-   直接各写死一个实测比较，比信 autotune 的单次结论可靠。
-2. **合并两个 kernel**：每多一次 launch 的边际成本 23.9 µs。但规约必须等所有专家
-   算完，目前没有干净解法（fp16 atomic 要先清零 `out`，那又是一次 launch）。
+空 kernel 的第二次 launch 只该付一遍 Python 启动路径，小的那组才符合物理。
+
+**修正后的结论：下面第 1、2 条都不值得做。** 摘掉 autotune 只省 ~9 µs（两个 kernel
+× 4.7），却要绑死芯片、换机器就得重测；合并两个 kernel 只省 ~4 µs，而规约必须
+等所有专家算完，没有干净解法。剩下的空间在 kernel 本体（完整 forward 155.8 µs 里
+约 74.5 µs 是 kernel + 其余 python，固定开销约 62 µs），也就是下面第 3 条那类
+减少实际访存/算力的改动。
+
+1. ~~**摘掉 autotune、把赢家写死**~~ —— 收益 ~9 µs，且赢家在两次运行之间会变
+   （一次 `BLOCK_T=16, num_warps=2`，一次 `BLOCK_T=32, num_warps=4`，见
+   `results.json` 的 `raw_output`）。这与逐 config 计时看到的「全表只差 1.79x」
+   一致：config 差距太小，噪声就能决定名次。收益小、风险大，搁置。
+2. ~~**合并两个 kernel**~~ —— 收益 ~4 µs，不值得。
 3. **`partial[E,T,H]` → `partial[TOP_K,T,H]`**：8 片里只有 2 片非零。改按**排名**
    而不是专家编号索引，每个槽位仍恰好被一个 program 写一次，traffic 降 4 倍。

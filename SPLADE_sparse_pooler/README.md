@@ -62,9 +62,50 @@ bash run.sh --only SPLADE_sparse_pooler
 
 ## 测试结果
 
-v1 尚未实现，暂无成绩。优化靶子：decoder 权重 93.8 MB，唯一一道撞访存 roofline 的。
-`v0/SPLADE_sparse_pooler.py` 顶部的 KS-PORT 注释记了本题的 harness 契约和分析结论。
-
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
-| SPLADE_sparse_pooler | MetaX C500 | — | — | — | — |
+| SPLADE_sparse_pooler | MetaX C500 | 0.6882 | 0.4707 | **1.46x** | ✅ 通过 |
+
+由 `bash run.sh --only SPLADE_sparse_pooler` 产出，原始数据见
+`results/cuda-MetaX_C500/{RESULTS.md,results.json}`（2026-08-19）。
+
+### 当前实现（保底路线）
+
+本题是所有算子里唯一撞访存 roofline 的：`decoder.weight` 是 30522×768×4B =
+**93.8 MB**，每次 forward 必读一遍，按沐曦实测 382 GB/s 的有效带宽，**光这一项
+就是 ~245 µs 的地板**。
+
+所以 MLM head（`dense → GELU → LayerNorm → decoder`）保持 torch 不动 ——
+厂商 GEMM 本来就最优 —— 只用一个 Triton kernel 融合 `log1p(relu(x))` + 分段
+pooling。收益来自三处：
+
+* 干掉 `seq_lens.tolist()` 这**一次 host 同步**（v0 L110）。段边界 `[offset, offset+L)`
+  改在 kernel 里从 `seq_lens` 现算前缀和；host 侧只用到 `seq_lens.shape[0]`，
+  取形状不需要同步。
+* 干掉 pooling 那个 4 次迭代的 Python 循环（4 次 kernel 启动 → 1 次）。
+* `[83, 30522]` fp32（9.7 MB）只读一遍就出结果，而不是 `relu`/`log1p` 各写读一遍。
+
+用到一条等价性：**`log1p(relu(·))` 单调不减，而单调函数与 max 可交换**，
+所以 `max` 分支先在原始 logits 上规约、最后只对 `[BLOCK_V]` 个结果激活一次，
+逐元素运算量降到 1/L（18~25 倍）。⚠ 这条**只对 `pooling="max"` 成立**，
+`sum` 与非线性不可交换（实测差值可达 7.5），所以两支的代码路径不同。
+
+### 已知的、尚未做的优化
+
+v1 = 470.7 µs，离 245 µs 的 roofline 地板还有 1.9 倍，剩下的空间在这两处：
+
+1. **`decoder.weight` 预降 fp16 并缓存**（沿用 fused_moe 的 `[KS-CACHE]` 手法）。
+   访存 93.8 MB → 46.9 MB，地板 245 µs → ~123 µs，中间张量也同步减半，
+   还能吃上 tensor core。精度粗估：LN 之后 h ~ N(0,1)，decoder 输出量级约 0.6，
+   fp16 相对精度 1e-3 → 绝对误差 ~6e-4，`log1p` 在该处斜率 0.63，`max` 不放大，
+   离 `atol=1e-2` 有一个数量级余量 —— **但这是估算，必须实测**。
+2. **减少 kernel 启动次数**。当前 `dense / GELU / LayerNorm / decoder / pool` 是
+   5 次启动。参考 fused_moe 在同一台机器上实测的数字（首次 launch 净 49.9 µs、
+   每多一次边际 23.9 µs），这一项可能占了相当大的比例 ——
+   先跑 `python3 bench/profile_overhead.py SPLADE_sparse_pooler` 确认，再决定
+   值不值得做全融合。
+
+   全融合的设计记在 `v1/SPLADE_sparse_pooler.py` 的 `[KS-PLAN]` 注释里，两个关键点：
+   grid 要按 `(V块,)` 切**让一个 program 覆盖全部 4 条序列**（否则 `decoder.weight`
+   被 4 个 program 各读一遍，89.5 MB 变 358 MB）；LayerNorm 沿 768 整行规约是天然的
+   program 间依赖，所以 `dense+GELU+LN` 必须是另一个**不切 N** 的 kernel。
