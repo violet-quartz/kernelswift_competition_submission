@@ -106,8 +106,16 @@ _NUM_WARPS = 4
 #   **只降 decoder，前面保持 fp32**：dense 才 6.7 µs，而 LayerNorm 在 fp16 下
 #   算方差是有名的容易掉精度，为 19 µs 冒那个险不值得。
 #
-#   改回 fp32 做 A/B 只需把这一行改成 torch.float32。
-_GEMM_DTYPE = torch.float16
+#   ⚠ 这里必须是 **bool 字面量**，不能写 `_GEMM_DTYPE = torch.float16`。
+#     auto_bench.py L74 的 _filter_module_ast() 只保留 Import / ClassDef /
+#     FunctionDef / **字面量**赋值四类节点，而 `torch.float16` 是 ast.Attribute
+#     不是 ast.Constant，整行会被**静默丢弃** —— 表现为运行时
+#     "v1 forward failed: name '_GEMM_DTYPE' is not defined"。
+#     （踩过一次。同一个过滤器还会吃掉模块级的 try/except，见 _ks_bootstrap。）
+#     dtype 在方法里解析，函数体内部不受那个过滤器影响。
+#
+#   改回 fp32 做 A/B：把下面这行改成 False。
+_USE_FP16_DECODER = True
 # ---------------------------------------------------------------------------
 
 
@@ -222,8 +230,10 @@ class ModelNew(nn.Module):
 
         # decoder 走半精度：这一步占 forward 的 89%，且已贴着带宽跑，
         # 唯一的出路是把 89.4 MB 的权重读减半。GEMM 内部仍是 fp32 累加。
-        dw, db = self._decoder_weights(_GEMM_DTYPE)
-        x = F.linear(h.to(_GEMM_DTYPE), dw, db)                      # [T, V] fp16
+        # dtype 在这里解析（函数体内），不能放模块级 —— 见 [KS-FP16] 的说明。
+        gemm_dtype = torch.float16 if _USE_FP16_DECODER else torch.float32
+        dw, db = self._decoder_weights(gemm_dtype)
+        x = F.linear(h.to(gemm_dtype), dw, db)                       # [T, V] fp16
         T, V = x.shape
 
         # S 是**形状**，取它不需要同步；取 seq_lens 的**值**才需要（那正是 v0

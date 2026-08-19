@@ -55,7 +55,17 @@ def main():
     S = seq_lens.shape[0]
 
     f32 = 4
-    # (标签, 可调用, 该步新增的访存字节数)
+    # ⚠ 这几步必须**逐字复刻 forward 的实际链路**，否则累计值不单调、净增出负数。
+    #   踩过一次：forward 已经把 decoder 换成 fp16 的 F.linear，而这里还在调
+    #   m.decoder(...)（fp32 的 nn.Linear），于是 ④ 比 ⑤ 还慢，⑤ 的净增是 -123.8。
+    use_fp16 = getattr(mod, "_USE_FP16_DECODER", False)
+    gdt = torch.float16 if use_fp16 else torch.float32
+    gb = 2 if use_fp16 else 4              # decoder 这一路每元素几字节
+    dw, db = m._decoder_weights(gdt)
+
+    def head():                            # dense + GELU + LayerNorm，恒为 fp32
+        return m.layer_norm(m.act(m.dense(hs)))
+
     with torch.no_grad():
         steps = [
             ("① dense",
@@ -65,21 +75,22 @@ def main():
              lambda: m.act(m.dense(hs)),
              T * H * f32),
             ("③ + LayerNorm",
-             lambda: m.layer_norm(m.act(m.dense(hs))),
+             head,
              T * H * f32),
-            ("④ + decoder（= 目标那一行）",
-             lambda: m.decoder(m.layer_norm(m.act(m.dense(hs)))),
-             V * H * f32 + V * f32 + T * V * f32),
+            (f"④ + decoder（{'fp16' if use_fp16 else 'fp32'}，= 目标那一行）",
+             lambda: torch.nn.functional.linear(head().to(gdt), dw, db),
+             V * H * gb + V * gb + T * V * gb),
             ("⑤ + pool kernel（= 完整 forward）",
              lambda: m(hs, seq_lens),
-             T * V * f32 + S * V * f32),
+             T * V * gb + S * V * f32),
         ]
         rows = []
         for label, fn, delta_bytes in steps:
             rows.append((label, bench(fn, sync, warmup, repeat) * 1e3, delta_bytes))
 
     print(f"task=SPLADE_sparse_pooler  device={dev_name}  warmup={warmup} repeat={repeat}")
-    print(f"口径与 auto_bench.py L429-445 一致；roofline 按 {BW/1e9:.0f} GB/s\n")
+    print(f"口径与 auto_bench.py L429-445 一致；roofline 按 {BW/1e9:.0f} GB/s")
+    print(f"decoder 路径 dtype = {gdt}（v1 的 _USE_FP16_DECODER = {use_fp16}）\n")
     w = max(len(r[0]) for r in rows) + 2
     print(f"{'步骤':<{w}}{'累计(µs)':>10}{'净增(µs)':>10}{'该步访存':>11}{'roofline':>10}{'效率':>8}")
     print("-" * (w + 49))
