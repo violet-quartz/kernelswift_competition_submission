@@ -26,6 +26,11 @@ from profile_overhead import bench, pick_device          # noqa: E402
 
 BW = 382e9      # 沐曦 C500 实测有效带宽，来自 env/bandwidth.py
 
+# 第一步的计时里裹着**每次 forward 都要付一遍**的固定开销：框架地板 + 首次
+# launch + 输出分配。不减掉的话第一步会背上全部这笔账，看起来效率奇低。
+# 数值来自 bench/profile_overhead.py 在同一台机器上的 ①②③ 三行。
+_FIXED_US = 8.5 + 48.0 + 10.3
+
 
 def _load_v1():
     path = ROOT / "SPLADE_sparse_pooler" / "v1" / "SPLADE_sparse_pooler.py"
@@ -78,7 +83,7 @@ def main():
     w = max(len(r[0]) for r in rows) + 2
     print(f"{'步骤':<{w}}{'累计(µs)':>10}{'净增(µs)':>10}{'该步访存':>11}{'roofline':>10}{'效率':>8}")
     print("-" * (w + 49))
-    prev = 0.0
+    prev = _FIXED_US        # 第一步减掉固定开销，见 _FIXED_US 的说明
     for label, us, b in rows:
         net = us - prev
         floor = b / BW * 1e6
@@ -86,12 +91,18 @@ def main():
         print(f"{label:<{w}}{us:>10.1f}{net:>10.1f}{b/1024**2:>9.2f}MB{floor:>10.1f}{eff:>8}")
         prev = us
     print("-" * (w + 49))
+    print(f"（① 的净增已扣掉 {_FIXED_US:.1f} µs 固定开销：框架地板 + 首次 launch + 输出分配）")
 
     tot_b = sum(r[2] for r in rows)
     print(f"\n合计访存 {tot_b/1024**2:.1f} MB -> roofline {tot_b/BW*1e6:.0f} µs，实测 {rows[-1][1]:.1f} µs"
           f"（含 ~{66:.0f} µs 固定开销，见 bench/profile_overhead.py）")
-    print("\n怎么读：某一步的『净增』远大于它的 roofline，说明那一步有优化空间；")
-    print("接近则说明已经贴着带宽跑，只能靠减少字节数（降精度 / 不落地中间张量）再进一步。")
+    print("\n怎么读：")
+    print("  * 净增 >> roofline  -> 那一步有优化空间（多半是启动开销或实现低效）。")
+    print("  * 净增 ~= roofline  -> 已经贴着带宽跑，只能靠**减少字节数**再进一步")
+    print("                        （降精度 / 不落地中间张量）。")
+    print("  * 效率 > 100%       -> 该步的数据命中了 cache，没真的走 HBM。")
+    print("                        这类步骤的『融合掉中间张量』收益会低于 roofline 估计，")
+    print("                        因为那次往返本来就没花 HBM 的钱。")
 
 
 if __name__ == "__main__":
