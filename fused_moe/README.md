@@ -71,22 +71,12 @@ bash run.sh --only fused_moe
 
 ## 测试结果
 
-v1 已实现，尚未上机，暂无成绩。
-
-思路：单 kernel 融合路由 + dispatch + top_k 规约，grid 按 token 分片
-（`grid = (cdiv(T, BLOCK_T),)`），每个 program 内部循环全部 8 个专家、用稠密的
-`gate_w[BLOCK_T, E]` 把未选中的专家权重置 0 —— 于是 v0 里那 8 次 host 同步和
-16 次布尔索引 gather/scatter 全部消失，也不需要 atomic 或第二个 kernel。
-权重在首次 forward 时一次性预转置 + 预降精度并缓存，kernel 里零 `tl.trans`、
-零 dtype 转换。`BLOCK_T` / `num_warps` / `num_stages` 交给 `@triton.autotune`。
-
-推导和踩坑都记在源码注释里：`v0/fused_moe.py` 顶部的 KS-PORT 是 harness 契约，
-`v1/fused_moe.py` 里的 KS-SHAPE（并行形状）、KS-CACHE（权重缓存）、
-KS-TUNE（三个旋钮为什么不写死）分别对应三处设计决策。
-
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
-| fused_moe | MetaX C500 | 3.0974 | 0.1733 | **17.88x** | ✅ 通过 |
+| fused_moe | MetaX C500 | 3.0206 | 0.1718 | **17.58x** | ✅ 通过 |
+
+由 `bash run.sh --only fused_moe` 产出，原始数据见
+`results/cuda-MetaX_C500/{RESULTS.md,results.json}`（2026-08-19）。
 
 ### 实现要点
 
@@ -113,7 +103,14 @@ python3 fused_moe/scratch/which_config.py       # autotune 选了哪个 config +
 按实测收益排序（数据来自 `bench/profile_overhead.py`，完整 forward 155.8 µs）：
 
 1. **摘掉 autotune、把赢家写死**：Autotuner 包装层每次调用约 15.3 µs，两个 kernel
-   共 ~30 µs（20%）。代价是绑死芯片 —— 换机器要重新跑 `which_config.py` 填值。
+   共 ~30 µs（20%）。
+
+   ⚠ 但**赢家在两次运行之间会变**：同一台 C500 上，一次选出
+   `_moe_expert_kernel: BLOCK_T=16, num_warps=2`，另一次选出 `BLOCK_T=32, num_warps=4`
+   （见 `results.json` 的 `raw_output` 与 `scratch/which_config.py` 的输出）。
+   这与逐 config 计时看到的「全表只差 1.79x」一致 —— config 之间差距太小，
+   噪声就能决定名次。所以写死之前得先搞清楚到底哪个更快、还是根本无所谓；
+   直接各写死一个实测比较，比信 autotune 的单次结论可靠。
 2. **合并两个 kernel**：每多一次 launch 的边际成本 23.9 µs。但规约必须等所有专家
    算完，目前没有干净解法（fp16 atomic 要先清零 `out`，那又是一次 launch）。
 3. **`partial[E,T,H]` → `partial[TOP_K,T,H]`**：8 片里只有 2 片非零。改按**排名**

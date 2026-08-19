@@ -31,10 +31,120 @@ def _ks_bootstrap():
             pass
 
 
+# ---------------------------------------------------------------------------
+# [KS-PLAN] 分两步走，本文件先做第一步。
+#
+#   **第一步（本文件）**：MLM head 保持 torch（厂商 GEMM 本来就最优），只用一个
+#   Triton kernel 融合 `log1p(relu(x))` + 分段 pooling。收益来自：
+#     * 干掉 `seq_lens.tolist()` 这**一次 host 同步**（v0 L110）；
+#     * 干掉 pooling 那个 4 次迭代的 Python 循环；
+#     * `[83, 30522]` fp32（9.7 MB）只读一遍就出结果，而不是 log1p/relu 各写读一遍。
+#   预期 1.3~1.6x。工作量小一个数量级，先保证"完成"。
+#
+#   **第二步（暂不做）**：把 decoder GEMM 也融进来，中间结果彻底不落地。
+#     grid = (cdiv(V, BLOCK_V),) —— **一个 program 覆盖全部 4 条序列**，
+#     而不是 (S, V块)。因为 4 条序列共用同一份 decoder.weight：按 (S, V块) 切
+#     会让同一块权重被 4 个 program 各读一遍，89.5 MB 变 358 MB。
+#     每个 program：acc[128, BLOCK_V] 沿 K=768 累加 -> 加 bias -> 对 4 条序列各做
+#     一次 masked max -> log1p(relu(·)) -> 写出。83 个 token padding 到 128 一次装下，
+#     M 维不需要循环（L 最大 25）。
+#     LayerNorm 沿 768 整行规约，跨了 dense 输出的全部 N 维，是天然的 program 间
+#     依赖 —— 所以 dense+GELU+LN 必须是另一个 kernel，且那个 kernel **不能切 N**
+#     （grid=(cdiv(83,BLOCK_M),)，只切 K），LN 才能在 program 内完成。
+#     那一段只占 2.5% 的算力，别过度优化。
+#
+#   **一个 v0 注释里没算到的杠杆**：地板 ~245µs 是按 fp32 权重 93.8 MB / 382 GB/s
+#   算的。若沿用 fused_moe 的 [KS-CACHE] 把 decoder.weight 惰性预降成 fp16 并缓存，
+#   访存减半 -> 地板 ~123µs，还能吃上 tensor core。粗估精度：LN 之后 h ~ N(0,1)，
+#   decoder 输出量级约 0.6，fp16 相对精度 1e-3 -> 绝对误差 ~6e-4，log1p 在该处
+#   斜率 0.63，max 不放大 —— 离 atol=1e-2 有一个数量级余量。**但这是估算，必须实测**。
+# ---------------------------------------------------------------------------
+
+
+# 先写死跑通，之后再考虑挂 autotune。fused_moe 的教训：Autotuner 包装层每次调用
+# 约 15.3 µs，本题只有一个 kernel、且是访存受限，旋钮的收益可能还不如那笔开销。
+#
+# 两个 BLOCK 的取值靠 **乘积** 约束，不是各自独立：规约要 load 一个
+# [BLOCK_L, BLOCK_V] 的 fp32 tile，摊到 num_warps×64 个线程上就是每线程
+# BLOCK_L·BLOCK_V/线程数 个寄存器（架构上限约 255）：
+#
+#     BLOCK_L  BLOCK_V   tile   寄存器/线程(4 warps)   L=25 要几轮
+#           8      512    16K            16                4
+#          32      256    32K            32                1   <- 当前取值
+#          32      512    64K            64                1
+#          32     1024   128K           128                1   <- 太满，不用
+#
+# 取 32×256：L 最大 25，BLOCK_L=32 一个 tile 就覆盖任一段，循环只跑一轮；
+# BLOCK_V=256 是 1 KB 连续，合并访存绰绰有余，且 grid 有 4×120=480 个 program。
+# ⚠ 别照着这张表去精调 —— fused_moe 里同类估算预测 76 寄存器、实测 spill 441，
+#   这种"tile/线程数"的模型在 MACA 后端上不可信。它只用来排除明显过大的取值，
+#   真要调就上 bench/check_spill.py 看实测的 n_spills。
+_BLOCK_L = 32
+_BLOCK_V = 256
+_NUM_WARPS = 4
+
+
 @triton.jit
 def _splade_pool_kernel(
+    x_ptr,              # [T, V]  fp32   decoder 的输出（torch 算的）
+    seq_lens_ptr,       # [S]     int32  各段长度，和 = T
+    out_ptr,            # [S, V]  fp32
+    V,                  # 30522，运行时值（不是 2 的幂，必须带 mask）
+    S: tl.constexpr,        # 4，段数
+    BLOCK_S: tl.constexpr,  # next_pow2(S) = 4
+    BLOCK_L: tl.constexpr,  # 一次处理多少行 token
+    BLOCK_V: tl.constexpr,  # 一次处理多少列词表
+    POOLING_MAX: tl.constexpr,  # True=max, False=sum
 ):
-    pass
+    # 关于 log1p：这里用 tl.log(1.0 + x) 而不是 tl.math.log1p。两者的差别只在
+    # x 小到 1+x 舍入成 1.0 时（fp32 下 x < 6e-8），绝对误差 ~6e-8，对 atol=1e-2
+    # 完全无关紧要；而 log1p 走 libdevice 映射，正是沐曦/昇腾后端容易出问题的地方
+    # （参见 fused_moe 里对 tl.sigmoid 的同类顾虑）。不值得为这点精度冒可移植性的险。
+    pid_s = tl.program_id(0)        # 第几条序列
+    pid_v = tl.program_id(1)        # 第几个词表分块
+
+    offs_v = pid_v * BLOCK_V + tl.arange(0, BLOCK_V)
+    mask_v = offs_v < V
+
+    # ---- 从 seq_lens 现算本段的 [offset, offset+L)，避免 host 侧的 .tolist() ----
+    # S 只有 4，整个 seq_lens 一次load 进来做前缀和，比在 host 上算完再传省一次同步。
+    offs_s = tl.arange(0, BLOCK_S)
+    lens = tl.load(seq_lens_ptr + offs_s, mask=offs_s < S, other=0).to(tl.int32)
+    offset = tl.sum(tl.where(offs_s < pid_s, lens, 0))      # 前缀和
+    L = tl.sum(tl.where(offs_s == pid_s, lens, 0))          # 本段长度
+
+    # 累加器初值取各自运算的单位元。max 用 -inf 而不是 0：0 在本 kernel 里也
+    # 恰好等价（relu 就是 max(x,0)，多一个 0 参与 max 不改结果，已逐位验证），
+    # 但那个正确性是从后面的 relu 借来的，换掉 epilogue 就悄悄错了。
+    if POOLING_MAX:
+        acc = tl.full((BLOCK_V,), float("-inf"), dtype=tl.float32)
+    else:
+        acc = tl.zeros((BLOCK_V,), dtype=tl.float32)
+
+    # L 是运行时值，所以这是运行时上界的循环。BLOCK_L=32 >= max(L)=25，
+    # 实际只跑一轮 —— 但写成循环才不依赖"段长一定 <= BLOCK_L"这个假设。
+    for l0 in range(0, L, BLOCK_L):
+        rows = l0 + tl.arange(0, BLOCK_L)
+        m = rows < L                                   # 段内有效行
+        ptrs = x_ptr + (offset + rows)[:, None] * V + offs_v[None, :]
+        mask = m[:, None] & mask_v[None, :]
+
+        if POOLING_MAX:
+            # 单调性等价：max_L(log1p(relu(z))) == log1p(relu(max_L(z)))，
+            # 所以这里只在**原始 logits** 上取 max，激活留到循环外做一次。
+            tile = tl.load(ptrs, mask=mask, other=float("-inf"))
+            acc = tl.maximum(acc, tl.max(tile, axis=0))
+        else:
+            # sum 与非线性不可交换，必须逐元素激活后再累加。
+            tile = tl.load(ptrs, mask=mask, other=0.0)
+            acc += tl.sum(tl.log(1.0 + tl.maximum(tile, 0.0)), axis=0)
+
+    # max 分支的激活挪到这里：只作用在 [BLOCK_V] 上，而不是 [L, BLOCK_V]，
+    # 省 18~25 倍的逐元素运算。sum 分支在循环内已经算过了。
+    if POOLING_MAX:
+        acc = tl.log(1.0 + tl.maximum(acc, 0.0))
+
+    tl.store(out_ptr + pid_s * V + offs_v, acc, mask=mask_v)
 
 
 class ModelNew(nn.Module):
@@ -58,15 +168,36 @@ class ModelNew(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, seq_lens: torch.Tensor) -> list:
         # hidden_states: [83, 768] float32   seq_lens: [4] int32，和为 83
-        # ⚠️ 返回类型必须是 **list**（4 个 [30522] 张量），不能是 tuple ——
-        #    auto_bench.py L328 的 compare_values 会先比类型。
         #
-        # 本题是唯一一道撞访存 roofline 的：decoder 权重 93.8 MB 必读，
-        # 按沐曦实测 382 GB/s 地板就是 ~245µs，天花板约 2x。
-        # 廉价保底方案：decoder 保持 torch nn.Linear，只用 Triton 融合
-        # log1p(relu(x)) + 分段 pooling，顺带干掉 seq_lens.tolist() 的 host 同步。
-        # 详见 v0/SPLADE_sparse_pooler.py 顶部的 KS-PORT 说明。
-        raise NotImplementedError
+        # MLM head 先走 torch（见 [KS-PLAN] 第一步）：这四步只占 2.5% 的算力，
+        # 而 decoder 那个 [83,768]@[768,30522] 交给厂商 GEMM 本来就最优。
+        x = self.decoder(self.layer_norm(self.act(self.dense(hidden_states))))
+        T, V = x.shape
+
+        # S 是**形状**，取它不需要同步；取 seq_lens 的**值**才需要（那正是 v0
+        # 里 .tolist() 的问题）。所以 grid 能在 host 上算，段边界在 kernel 里算。
+        S = seq_lens.shape[0]
+
+        x = x.contiguous()
+        seq_lens = seq_lens.contiguous()
+        out = torch.empty((S, V), dtype=x.dtype, device=x.device)
+
+        grid = lambda META: (S, triton.cdiv(V, META["BLOCK_V"]))   # noqa: E731
+        _splade_pool_kernel[grid](
+            x, seq_lens, out,
+            V,
+            S=S,
+            BLOCK_S=triton.next_power_of_2(S),
+            BLOCK_L=_BLOCK_L,
+            BLOCK_V=_BLOCK_V,
+            POOLING_MAX=(self.pooling == "max"),
+            num_warps=_NUM_WARPS,
+        )
+
+        # ⚠️ 必须返回 **list**（S 个 [V] 张量），不能是 tuple ——
+        #    auto_bench.py L328 的 compare_values 会先比类型再逐项比。
+        #    unbind 出来的是 out 的视图，不复制。
+        return list(out.unbind(0))
 
 
 def get_inputs():
