@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── mm_encoder_attention/             本文件夹
     ├── README.md                     本文件
     ├── tasks/
@@ -65,7 +65,12 @@ bash run.sh --only mm_encoder_attention
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | mm_encoder_attention | MetaX C500 | 0.1322 | 0.1260 | **1.05x** | ✅ 通过 |
+| mm_encoder_attention | Ascend 910B2C | 0.1346 | 0.0934 | **1.44x** | ✅ 通过 |
 
 `bench/check_spill.py mm_encoder_attention` 三个 num_warps 候选均 `n_spills=0`
 （n_regs 171/158/156，smem 49152），与 flex_attention 实测值逐位相同 ——
 两者 tile 尺寸一致，寄存器不是瓶颈。
+
+昇腾数据取 3 轮**交替**执行的中位数（各轮 1.41 1.44 1.47，极差 4.1%），明细见 `results/npu-Ascend910B2C/`。
+
+昇腾上 v1 与沐曦走**不同分支**：K 连续载入（`K_CONTIG`）。沐曦那一支的行为未改动。

@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── head_compute_mix_bwd/             本文件夹
     ├── README.md                     本文件
     ├── tasks/
@@ -65,3 +65,10 @@ bash run.sh --only head_compute_mix_bwd
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | head_compute_mix_bwd | MetaX C500 | 0.1869 | 0.1181 | **1.58x** | ✅ 通过 |
+| head_compute_mix_bwd | Ascend 910B2C | 0.0796 | 0.0917 | **0.86x** | ✅ 通过 |
+
+昇腾数据取 3 轮**交替**执行的中位数（各轮 0.82 0.86 0.89，极差 8.1%），明细见 `results/npu-Ascend910B2C/`。
+
+昇腾上 v1 与沐曦走**不同分支**：按后端选 `KS_BLOCK_SIZE` 默认值（昇腾 64 / 沐曦 1024）。沐曦那一支的行为未改动。
+
+⚠ 这题在昇腾上**翻不过 v0**，0.86x 是天花板，原因是结构性的：一次 Triton kernel 启动固定 18us（空 kernel 也是），而 v0 的十一个 torch 算子每个只要 3.4us；本 kernel 的实际计算不到 9us —— 把两个规约连同 atomic_add 整个删掉，时间纹丝不动（27.0 → 27.3us）。8192 个 float 的规模不够摊薄一次启动，不必再往 kernel 里调。

@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── mhc_post/                         本文件夹
     ├── README.md                     本文件
     ├── spill_probe.py                寄存器溢出诊断探针，供 bench/check_spill.py 自动发现
@@ -66,3 +66,6 @@ bash run.sh --only mhc_post
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | mhc_post | MetaX C500 | 6.1216 | 0.4952 | **12.36x** | ✅ 通过 |
+| mhc_post | Ascend 910B2C | 1.9481 | 0.6837 | **2.85x** | ✅ 通过 |
+
+昇腾数据取 3 轮**交替**执行的中位数（各轮 2.83 2.85 2.86，极差 1.3%），明细见 `results/npu-Ascend910B2C/`。

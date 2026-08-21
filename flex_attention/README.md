@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── flex_attention/                   本文件夹
     ├── README.md                     本文件
     ├── tasks/
@@ -65,8 +65,13 @@ bash run.sh --only flex_attention
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | flex_attention | MetaX C500 | 0.1453 | 0.1370 | **1.06x** | ✅ 通过 |
+| flex_attention | Ascend 910B2C | 0.1661 | 0.0934 | **1.70x** | ✅ 通过 |
 
 v0 本身只有 145µs，而本仓库所有 v1 实测的耗时下界约 110µs（见根目录各算子
 results 的横向对比），所以本题的加速比上限只有约 1.3x —— 1.06x 已接近该上限，
 瓶颈不在 kernel 算法。`bench/check_spill.py flex_attention` 三个 num_warps
 候选均 `n_spills=0`（n_regs 171/158/156，smem 49152），寄存器不是瓶颈。
+
+昇腾数据取 3 轮**交替**执行的中位数（各轮 1.69 1.70 1.78，极差 5.0%），明细见 `results/npu-Ascend910B2C/`。
+
+昇腾上 v1 与沐曦走**不同分支**：预计算因果掩码（`MASK_FROM_MEM`）+ K 连续载入（`K_CONTIG`）。沐曦那一支的行为未改动。

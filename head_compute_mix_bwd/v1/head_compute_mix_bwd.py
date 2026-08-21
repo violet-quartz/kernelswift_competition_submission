@@ -107,6 +107,31 @@ def _env_int(name: str):
         return None
 
 
+def _default_block_size():
+    """按后端选 KS_BLOCK_SIZE 的默认值。只在 __init__ 调一次。
+
+    [KS-PORT] 这不是分支，是**按卡取默认常量** —— kernel 一个字不用改。
+    两块卡的最优点差了一个数量级，写死任何一个换台机器就是随机数：
+      * 沐曦：1024（原实测值，grid=8）
+      * 昇腾：64。实测 1024→0.76x、256→0.92x、64→0.92x、4096→0.44x，
+        往小走明显更好；64/128/256 三者互相分不开（噪声 8.6%），取 64。
+    环境变量 KS_BLOCK_SIZE 仍然覆盖本函数，扫描时用它。
+
+    ⚠ 昇腾上这道题**翻不过 v0**，天花板 ~0.87x，原因是结构性的：
+    一次 Triton kernel 启动固定 18us（空 kernel 也是），而 v0 的十一个 torch
+    算子每个只要 3.4us。这个 kernel 的实际计算不到 9us —— 把两个规约连同
+    atomic_add **整个删掉**，时间纹丝不动（27.0 → 27.3us）。8192 个 float
+    的规模不够摊薄一次启动，别再往 kernel 里调了。
+    """
+    try:
+        import triton
+        if "ascend" in triton.backends.backends:
+            return 64
+    except Exception:
+        pass
+    return 1024
+
+
 def _ks_bootstrap():
     """按需导入后端扩展，让 torch.npu / torch.mlu 命名空间真正出现。
 
@@ -188,7 +213,7 @@ class ModelNew(nn.Module):
         super(ModelNew, self).__init__()
         # 环境变量在 __init__ 里读一次，不放 forward 里 —— 这道题 host-bound，
         # 被计时的路径上多一次 os.environ 查询都是实打实的成本。
-        self._block_size = _env_int("KS_BLOCK_SIZE") or 1024
+        self._block_size = _env_int("KS_BLOCK_SIZE") or _default_block_size()
 
     def forward(
         self,

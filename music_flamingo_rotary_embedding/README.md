@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── music_flamingo_rotary_embedding/  本文件夹
     ├── README.md                     本文件
     ├── tasks/
@@ -65,3 +65,6 @@ bash run.sh --only music_flamingo_rotary_embedding
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | music_flamingo_rotary_embedding | MetaX C500 | 0.2223 | 0.1124 | **1.98x** | ✅ 通过 |
+| music_flamingo_rotary_embedding | Ascend 910B2C | 0.1109 | 0.0760 | **1.43x** | ✅ 通过 |
+
+昇腾数据取 3 轮**交替**执行的中位数（各轮 1.41 1.43 1.74，极差 23.5%），明细见 `results/npu-Ascend910B2C/`。

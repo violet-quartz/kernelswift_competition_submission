@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── SPLADE_sparse_pooler/             本文件夹
     ├── README.md                     本文件
     ├── tasks/
@@ -65,6 +65,7 @@ bash run.sh --only SPLADE_sparse_pooler
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | SPLADE_sparse_pooler | MetaX C500 | 0.6613 | 0.2632 | **2.51x** | ✅ 通过 |
+| SPLADE_sparse_pooler | Ascend 910B2C | 0.3114 | 0.1538 | **2.04x** | ✅ 通过 |
 
 由 `bash run.sh --only SPLADE_sparse_pooler` 产出，原始数据见
 `results/cuda-MetaX_C500/{RESULTS.md,results.json}`（2026-08-19）。
@@ -123,3 +124,5 @@ pool        24.0 µs     14.5 µs     61%
   fp32，`torch.allclose` 要求 dtype 一致。
 * **`scratch/breakdown.py` 的分步必须逐字复刻 forward 的实际链路**，否则累计值
   不单调、净增出负数（改了 forward 忘了改脚本，出现过 -123.8 µs）。
+
+昇腾数据取 3 轮**交替**执行的中位数（各轮 2.01 2.04 2.05，极差 1.9%），明细见 `results/npu-Ascend910B2C/`。

@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── fused_moe/                        本文件夹
     ├── README.md                     本文件
     ├── tasks/
@@ -74,6 +74,7 @@ bash run.sh --only fused_moe
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | fused_moe | MetaX C500 | 3.0206 | 0.1718 | **17.58x** | ✅ 通过 |
+| fused_moe | Ascend 910B2C | 2.3141 | 0.1321 | **17.35x** | ✅ 通过 |
 
 由 `bash run.sh --only fused_moe` 产出，原始数据见
 `results/cuda-MetaX_C500/{RESULTS.md,results.json}`（2026-08-19）。
@@ -124,3 +125,5 @@ autotune 包装层 15.3 µs」，据此把「摘掉 autotune」排在第一位�
 2. ~~**合并两个 kernel**~~ —— 收益 ~4 µs，不值得。
 3. **`partial[E,T,H]` → `partial[TOP_K,T,H]`**：8 片里只有 2 片非零。改按**排名**
    而不是专家编号索引，每个槽位仍恰好被一个 program 写一次，traffic 降 4 倍。
+
+昇腾数据取 3 轮**交替**执行的中位数（各轮 17.12 17.35 17.79，极差 3.9%），明细见 `results/npu-Ascend910B2C/`。

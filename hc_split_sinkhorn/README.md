@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── hc_split_sinkhorn/                本文件夹
     ├── README.md                     本文件
     ├── selftest_probe.py             v1 kernel 特性冒烟探针，供 env/selftest.py 自动发现
@@ -66,4 +66,6 @@ bash run.sh --only hc_split_sinkhorn
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | hc_split_sinkhorn | MetaX C500 | 1.6087 | 0.1091 | **14.75x** | ✅ 通过 |
+| hc_split_sinkhorn | Ascend 910B2C | 0.6356 | 0.0807 | **7.86x** | ✅ 通过 |
 
+昇腾数据取 3 轮**交替**执行的中位数（各轮 7.70 7.86 8.49，极差 10.1%），明细见 `results/npu-Ascend910B2C/`。

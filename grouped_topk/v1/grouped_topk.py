@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn as nn
 import triton
@@ -68,7 +70,9 @@ def _grouped_topk_kernel(
     #   EXPERTS_PER_GROUP = NUM_EXPERTS // NUM_EXPERT_GROUP
     # 沐曦 triton 3.0.0 上 constexpr // constexpr 的结果**不再是 constexpr**，
     # 拿去喂 tl.arange 会编译失败（而同一行上方直接用 constexpr 参数的 arange 正常）。
-    EXPERTS_PER_GROUP: tl.constexpr
+    EXPERTS_PER_GROUP: tl.constexpr,
+    # [KS-PORT] 两级 top-k 开关，见 _use_two_level_topk()
+    TWO_LEVEL_TOPK: tl.constexpr = False,
 ):
     pid = tl.program_id(0)
 
@@ -82,22 +86,47 @@ def _grouped_topk_kernel(
     rank = tl.sum(gt.to(tl.int32), axis=1)
     sel_group_id = rank < TOPK_GROUP # (NUM_EXPERT_GROUP,)
 
-    tmp_scores = tl.where(sel_group_id[:, None], scores, float("-inf")) # (NUM_EXPERT_GROUP, EXPERTS_PER_GROUP)
-    tmp_scores = tl.reshape(tmp_scores, [NUM_EXPERTS])
+    masked = tl.where(sel_group_id[:, None], scores, float("-inf")) # (NUM_EXPERT_GROUP, EXPERTS_PER_GROUP)
 
-    offset_expert = tl.arange(0, NUM_EXPERTS)
     offset_k = tl.arange(0, TOPK)
-
-    cur = tmp_scores # (NUM_EXPERTS, )
     top_v = tl.zeros([TOPK], dtype=tl.float32)
     top_id = tl.zeros([TOPK], dtype=tl.int32)
 
-    for j in tl.static_range(TOPK):
-        v = tl.max(cur, axis=0)
-        id = tl.argmax(cur, axis=0)
-        top_v = tl.where(offset_k == j, v, top_v)
-        top_id = tl.where(offset_k == j, id, top_id)
-        cur = tl.where(offset_expert == id, float("-inf"), cur)
+    # [KS-PORT] 两条实现，选哪条见 _use_two_level_topk()。TWO_LEVEL_TOPK 是
+    # tl.constexpr，没被选中的那支编译期就折掉、根本不进 IR。
+    if TWO_LEVEL_TOPK:
+        # 全程保持二维，**不出现 tl.reshape**。
+        # 昇腾（triton-ascend 3.2.0）上 reshape 之后再做带 index 的规约会编译失败：
+        #     'hfusion.reduce_with_index' op currently ReduceWithIndexOp
+        #     only supports one reduction dimension
+        # 最小复现验过四种写法：reshape→tl.max 正常、天然一维 argmax 正常、
+        # 二维 argmax(axis=1) 正常，**只有 reshape→argmax 挂**。也就是说
+        # reshape 本身没问题，后端是在 index 那条路径上没折掉它。
+        # 于是拆成两级：组内 argmax(axis=1) → 组间一维 argmax。
+        # 平局行为与下面那支**逐位一致**：扁平下标 g*EPG+c 的大小序和 (g, c) 的
+        # 字典序相同，两级各取最小即等价于扁平取最小。
+        cur = masked                                   # (NUM_EXPERT_GROUP, EXPERTS_PER_GROUP)
+        for j in tl.static_range(TOPK):
+            v_g = tl.max(cur, axis=1)                  # 每组最大值
+            i_g = tl.argmax(cur, axis=1)               # 每组内的列号
+            v = tl.max(v_g, axis=0)                    # 全局最大值
+            g = tl.argmax(v_g, axis=0)                 # 命中的组号（输入天然一维）
+            # 取第 g 组的列号。掩码求和做 gather —— tl.sum 不带 index，不受上面那条限制。
+            c = tl.sum(tl.where(offset_group == g, i_g, 0), axis=0)
+            top_v = tl.where(offset_k == j, v, top_v)
+            top_id = tl.where(offset_k == j, g * EXPERTS_PER_GROUP + c, top_id)
+            cur = tl.where((offset_group[:, None] == g) & (offset_experts[None, :] == c),
+                           float("-inf"), cur)
+    else:
+        # 原写法：拍平成一维后逐轮 argmax。沐曦上跑通过的就是这支。
+        offset_expert = tl.arange(0, NUM_EXPERTS)
+        cur = tl.reshape(masked, [NUM_EXPERTS])
+        for j in tl.static_range(TOPK):
+            v = tl.max(cur, axis=0)
+            id = tl.argmax(cur, axis=0)
+            top_v = tl.where(offset_k == j, v, top_v)
+            top_id = tl.where(offset_k == j, id, top_id)
+            cur = tl.where(offset_expert == id, float("-inf"), cur)
 
     if IS_SOFT_MAX:
         m = tl.max(top_v, axis=0)
@@ -119,6 +148,33 @@ def _grouped_topk_kernel(
 
 
 
+def _use_two_level_topk():
+    """要不要走两级 top-k。只在 __init__ 调一次。
+
+    [KS-PORT] 这个开关**一半是硬要求、一半是待测的性能猜想**：
+      * 昇腾：必须为 True —— 另一支（reshape → argmax）在那块卡上根本编译不过。
+      * 其它卡：默认 False，保持原样。两级规约在沐曦上**未必更慢**，但没量过就
+        不切 —— 默认值取保守的那个，新卡进来自动拿老行为，不会被一个未经验证的
+        猜想拖下水。
+
+    所以判据写成**白名单**（只有实测过的后端才切），而不是"不是 X 就走新路"。
+    复测用 KS_TWO_LEVEL_TOPK=0/1 覆盖，不必改代码：run_batch.py 支持 per-job env，
+    同一份文件两个 job 跑一批就是配对比较。结论记在编排仓的 pending-verify.md。
+
+    [KS-PORT] 探测和读环境变量都必须待在函数体里 —— auto_bench.py L74 的
+    _filter_module_ast() 只保留 Import / ClassDef / FunctionDef / 字面量赋值，
+    模块级带函数调用的赋值会被整个丢弃（和 _ks_bootstrap 同一个理由）。
+    """
+    raw = os.environ.get("KS_TWO_LEVEL_TOPK")
+    if raw:
+        return raw not in ("0", "false", "False")
+    try:
+        import triton
+        return "ascend" in triton.backends.backends
+    except Exception:
+        return False
+
+
 class ModelNew(nn.Module):
     def __init__(
         self,
@@ -136,6 +192,8 @@ class ModelNew(nn.Module):
         self.topk_group = topk_group
         self.scoring_func = scoring_func
         self.routed_scaling_factor = routed_scaling_factor
+        # 后端分支在构造时定死，forward 里不再判断（auto_bench 只计时 forward）
+        self.two_level_topk = _use_two_level_topk()
 
     def forward(
         self,
@@ -162,6 +220,7 @@ class ModelNew(nn.Module):
             NUM_EXPERTS=num_experts,
             NUM_EXPERT_GROUP=self.num_expert_group,
             EXPERTS_PER_GROUP=num_experts // self.num_expert_group,
+            TWO_LEVEL_TOPK=self.two_level_topk,
         )
 
         return topk_weights, topk_ids

@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── grouped_topk/                     本文件夹
     ├── README.md                     本文件
     ├── tasks/
@@ -65,3 +65,8 @@ bash run.sh --only grouped_topk
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | grouped_topk | MetaX C500 | 0.3080 | 0.1120 | **2.75x** | ✅ 通过 |
+| grouped_topk | Ascend 910B2C | 0.1764 | 0.1219 | **1.44x** | ✅ 通过 |
+
+昇腾数据取 3 轮**交替**执行的中位数（各轮 1.42 1.44 1.45，极差 2.2%），明细见 `results/npu-Ascend910B2C/`。
+
+昇腾上 v1 与沐曦走**不同分支**：两级 top-k（`TWO_LEVEL_TOPK`）——昇腾上 reshape 后不能做带 index 的规约。沐曦那一支的行为未改动。

@@ -1,0 +1,40 @@
+{
+  "chip": "npu-Ascend910B2C",
+  "env": {
+    "python": "3.11.14",
+    "platform": "Linux-5.15.0-113-generic-x86_64-with-glibc2.38",
+    "chip": "npu:Ascend910B2C",
+    "torch": "2.9.0+cpu",
+    "triton": "3.2.0 (triton-ascend, backends=['ascend'])"
+  },
+  "bench_args": {
+    "chip": "auto",
+    "only": [
+      "SPLADE_sparse_pooler"
+    ],
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01,
+    "reps": 3
+  },
+  "results": [
+    {
+      "name": "SPLADE_sparse_pooler",
+      "wall_s": 29.1,
+      "raw_output": "PASS accuracy; v0=0.311401 ms, v1=0.154627 ms, speedup=2.014x",
+      "status": "pass",
+      "v0_ms": 0.311401,
+      "v1_ms": 0.153758,
+      "speedup": 2.045,
+      "reps": 3,
+      "speedup_runs": [
+        2.014,
+        2.045,
+        2.053
+      ],
+      "spread_pct": 1.9
+    }
+  ]
+}

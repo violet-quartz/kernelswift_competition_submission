@@ -21,7 +21,7 @@
 │   ├── selftest.py                   后端连通性 + Triton 工具链自检，同样自动发现每个算子的 selftest_probe.py
 │   ├── bandwidth.py                  可达访存带宽基准，给"有没有撞到 roofline"提供分母，随快照落进 env.lock.txt
 │   ├── metax-c500/                   沐曦环境配置
-│   └── ascend-910b3/                 昇腾环境配置
+│   └── ascend-910b2c/                昇腾环境配置
 └── centre_random_augmentation/       本文件夹
     ├── README.md                     本文件
     ├── tasks/
@@ -65,3 +65,6 @@ bash run.sh --only centre_random_augmentation
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
 |---|---|---:|---:|---:|:---:|
 | centre_random_augmentation | MetaX C500 | 1.0032 | 0.1711 | **5.86x** | ✅ 通过 |
+| centre_random_augmentation | Ascend 910B2C | 0.5111 | 0.2455 | **2.04x** | ✅ 通过 |
+
+昇腾数据取 3 轮**交替**执行的中位数（各轮 2.00 2.04 2.13，极差 6.0%），明细见 `results/npu-Ascend910B2C/`。

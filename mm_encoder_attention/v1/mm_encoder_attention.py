@@ -57,6 +57,7 @@ def _mm_encoder_attention_kernel(
     BLOCK_M: tl.constexpr,        # next_pow2(Q_LEN)  = 128
     BLOCK_N: tl.constexpr,        # next_pow2(KV_LEN) = 128
     IS_CAUSAL: tl.constexpr,      # 本题 False（全连接注意力）
+    K_CONTIG: tl.constexpr,       # K 是否必须按连续布局载入，见 _prefers_contiguous_k
 ):
     # grid = (BATCH, NUM_HEADS)：一个 program 负责一个 (batch, head)，一趟算完。
     # **刻意不写 for 循环遍历 K/V 分块** —— 经典 flash-attention 那种
@@ -86,10 +87,23 @@ def _mm_encoder_attention_kernel(
     q = tl.load(q_ptr + q_base + offs_m[:, None] * stride_t + offs_d[None, :],
                 mask=m_mask[:, None], other=0.0)
 
-    # K 直接按**转置布局**读成 [HEAD_SIZE, BLOCK_N]，省掉 tl.trans 的 layout
-    # conversion（沐曦对布局转换比较脆，能不转就不转）
-    k_t = tl.load(k_ptr + kv_base + offs_d[:, None] + offs_n[None, :] * stride_t,
-                  mask=n_mask[None, :], other=0.0)
+    # [KS-PORT] 两块卡在这里要求**相反**，用 constexpr 分支各走各的：
+    #   * 沐曦：对布局转换比较脆，能不转就不转 —— 直接按转置布局读成
+    #     [HEAD_SIZE, BLOCK_N]，省掉 tl.trans 的 layout conversion。
+    #   * 昇腾：不接受末维非连续的 load，转置读直接编译失败
+    #         'hivm.hir.load' op Unsupported op for finding the root alloc.
+    #     最小复现验过这和 tl.dot 无关 —— 转置载入哪怕只 store 出去也一样挂，
+    #     而"行跨步、末维连续"的 load 完全正常。只能自然布局读入再 tl.trans。
+    # K_CONTIG 是 tl.constexpr，**编译期就折叠掉**，没被选中的那支根本不进 IR
+    # ——和上面 IS_CAUSAL 的用法一样。昇腾上配对实测过：带分支 1.47x、
+    # 写死昇腾路径 1.47x，逐轮差异 0.5% 远小于本批噪声 3.6~4.4%，开销为零。
+    if K_CONTIG:
+        k = tl.load(k_ptr + kv_base + offs_n[:, None] * stride_t + offs_d[None, :],
+                    mask=n_mask[:, None], other=0.0)     # [BLOCK_N, HEAD_SIZE]
+        k_t = tl.trans(k)                                # [HEAD_SIZE, BLOCK_N]
+    else:
+        k_t = tl.load(k_ptr + kv_base + offs_d[:, None] + offs_n[None, :] * stride_t,
+                      mask=n_mask[None, :], other=0.0)   # [HEAD_SIZE, BLOCK_N]
 
     # V: [BLOCK_N, HEAD_SIZE]
     v = tl.load(v_ptr + kv_base + offs_n[:, None] * stride_t + offs_d[None, :],
@@ -121,6 +135,26 @@ def _mm_encoder_attention_kernel(
              acc.to(out_ptr.dtype.element_ty), mask=m_mask[:, None])
 
 
+def _prefers_contiguous_k():
+    """K 是否必须按连续布局载入（即末维不能带大跨步）。只在 __init__ 调一次。
+
+    [KS-PORT] 开关按**能力**命名而不是芯片名（K_CONTIG 而非 IS_ASCEND）：
+    再来一块卡时是去挑已有开关的组合，而不是每个文件都新增一支。
+
+    [KS-PORT] 探测逻辑必须待在函数体里 —— auto_bench.py L74 的
+    _filter_module_ast() 只保留 Import / ClassDef / FunctionDef / 字面量赋值，
+    模块级的 try/except 是 ast.Try，会被整个丢弃（和 _ks_bootstrap 同一个理由）。
+
+    判据用 triton.backends.backends：这是唯一能区分厂商版 triton 的东西，
+    __version__ 和 __file__ 都区分不出来（昇腾那份也自称 3.2.0）。
+    """
+    try:
+        import triton
+        return "ascend" in triton.backends.backends
+    except Exception:
+        return False
+
+
 class ModelNew(nn.Module):
     def __init__(self, num_heads: int = 8, head_size: int = 64, num_kv_heads: int = 8):
         super().__init__()
@@ -128,6 +162,9 @@ class ModelNew(nn.Module):
         self.head_size = head_size
         self.num_kv_heads = num_kv_heads
         self.scale = 1.0 / (head_size ** 0.5)
+        # 后端分支在构造时定死。auto_bench 只计时 forward，__init__ 不进计时路径，
+        # 所以这次探测连"很小的开销"都算不上 —— 是零。
+        self.k_contig = _prefers_contiguous_k()
 
     def forward(
         self,
@@ -156,6 +193,7 @@ class ModelNew(nn.Module):
             BLOCK_M=triton.next_power_of_2(q_len),      # 83 -> 128
             BLOCK_N=triton.next_power_of_2(kv_len),     # 83 -> 128
             IS_CAUSAL=False,                            # 本题是全连接注意力
+            K_CONTIG=self.k_contig,
         )
         return out
 

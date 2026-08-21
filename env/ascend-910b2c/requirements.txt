@@ -1,0 +1,8 @@
+# 纯 python 依赖。torch / torch_npu / triton-ascend 刻意不在这里 pin ——
+# 它们与驱动、CANN 版本强绑定，pip 覆盖装会直接把环境搞坏（见 setup.sh）。
+numpy
+
+# [KS-PORT] triton-ascend 3.2.0 的 wheel **漏声明了这个依赖**：
+# backends/ascend/utils.py 里硬 import pybind11，缺了它 `import triton` 直接
+# ModuleNotFoundError。装完 triton-ascend 必须补上。
+pybind11
