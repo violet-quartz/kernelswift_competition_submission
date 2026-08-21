@@ -62,10 +62,13 @@ bash run.sh --only mm_encoder_attention
 
 ## 测试结果
 
-| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
-|---|---|---:|---:|---:|:---:|
-| mm_encoder_attention | MetaX C500 | 0.1322 | 0.1260 | **1.05x** | ✅ 通过 |
-| mm_encoder_attention | Ascend 910B2C | 0.1346 | 0.0934 | **1.44x** | ✅ 通过 |
+| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 各轮实测 | 极差 | 结论 |
+|---|---|---:|---:|---:|---|---:|:---:|
+| mm_encoder_attention | MetaX C500 | 0.1322 | 0.1260 | **1.05x** | — | — | ✅ 通过 |
+| mm_encoder_attention | Ascend 910B2C | 0.1369 | 0.0939 | **1.46x** | 1.45 1.46 1.46 | 0.7% | ✅ 通过 |
+| mm_encoder_attention | Iluvatar BI-V150 | 0.1422 | 0.2247 | **0.63x** | 0.61 0.63 0.63 | 3.3% | ✅ 通过 |
+| mm_encoder_attention | Enflame S60 | 0.2196 | 0.3004 | **0.74x** | 0.73 0.74 0.77 | 5.7% | ✅ 通过 |
+| mm_encoder_attention | Hygon BW1000 | 0.1568 | 0.1475 | **1.06x** | 1.04 1.09 | 4.9% | ✅ 通过 |
 
 `bench/check_spill.py mm_encoder_attention` 三个 num_warps 候选均 `n_spills=0`
 （n_regs 171/158/156，smem 49152），与 flex_attention 实测值逐位相同 ——

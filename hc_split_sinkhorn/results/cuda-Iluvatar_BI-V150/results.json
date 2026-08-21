@@ -1,0 +1,40 @@
+{
+  "chip": "cuda-Iluvatar_BI-V150",
+  "env": {
+    "python": "3.10.18",
+    "torch": "2.7.1",
+    "triton": "3.1.0 (厂商版, backends=['iluvatar'])",
+    "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.31",
+    "chip": "cuda:Iluvatar BI-V150"
+  },
+  "bench_args": {
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "hc_split_sinkhorn"
+    ]
+  },
+  "results": [
+    {
+      "name": "hc_split_sinkhorn",
+      "status": "pass",
+      "v0_ms": 1.398743,
+      "v1_ms": 0.167648,
+      "speedup": 8.349,
+      "reps": 3,
+      "speedup_runs": [
+        8.315,
+        8.349,
+        8.435
+      ],
+      "spread_pct": 1.4,
+      "wall_s": 18.8,
+      "raw_output": "PASS accuracy; v0=1.398743 ms, v1=0.168214 ms, speedup=8.315x"
+    }
+  ]
+}

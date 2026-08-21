@@ -62,10 +62,13 @@ bash run.sh --only head_compute_mix_bwd
 
 ## 测试结果
 
-| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
-|---|---|---:|---:|---:|:---:|
-| head_compute_mix_bwd | MetaX C500 | 0.1869 | 0.1181 | **1.58x** | ✅ 通过 |
-| head_compute_mix_bwd | Ascend 910B2C | 0.0796 | 0.0917 | **0.86x** | ✅ 通过 |
+| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 各轮实测 | 极差 | 结论 |
+|---|---|---:|---:|---:|---|---:|:---:|
+| head_compute_mix_bwd | MetaX C500 | 0.1869 | 0.1181 | **1.58x** | — | — | ✅ 通过 |
+| head_compute_mix_bwd | Ascend 910B2C | 0.0782 | 0.0924 | **0.85x** | 0.83 0.85 0.85 | 2.0% | ✅ 通过 |
+| head_compute_mix_bwd | Iluvatar BI-V150 | 0.3380 | 0.1736 | **1.94x** | 1.94 1.94 1.95 | 0.8% | ✅ 通过 |
+| head_compute_mix_bwd | Enflame S60 | 0.3453 | 0.3328 | **1.04x** | 1.04 1.04 1.10 | 6.5% | ✅ 通过 |
+| head_compute_mix_bwd | Hygon BW1000 | 0.2181 | 0.2161 | **1.03x** | 1.01 1.03 1.04 | 3.4% | ✅ 通过 |
 
 昇腾数据取 3 轮**交替**执行的中位数（各轮 0.82 0.86 0.89，极差 8.1%），明细见 `results/npu-Ascend910B2C/`。
 

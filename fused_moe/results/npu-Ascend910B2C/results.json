@@ -2,39 +2,39 @@
   "chip": "npu-Ascend910B2C",
   "env": {
     "python": "3.11.14",
-    "platform": "Linux-5.15.0-113-generic-x86_64-with-glibc2.38",
-    "chip": "npu:Ascend910B2C",
     "torch": "2.9.0+cpu",
-    "triton": "3.2.0 (triton-ascend, backends=['ascend'])"
+    "triton": "3.2.0 (triton-ascend, backends=['ascend'])",
+    "platform": "Linux-5.15.0-113-generic-x86_64-with-glibc2.38",
+    "chip": "npu:Ascend910B2C"
   },
   "bench_args": {
-    "chip": "auto",
-    "only": [
-      "fused_moe"
-    ],
     "warmup": 200,
     "repeat": 500,
     "seed": 42,
     "atol": 0.01,
     "rtol": 0.01,
-    "reps": 3
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "fused_moe"
+    ]
   },
   "results": [
     {
       "name": "fused_moe",
-      "wall_s": 37.1,
-      "raw_output": "PASS accuracy; v0=2.321321 ms, v1=0.133823 ms, speedup=17.346x",
       "status": "pass",
-      "v0_ms": 2.314087,
-      "v1_ms": 0.132117,
-      "speedup": 17.346,
+      "v0_ms": 2.253514,
+      "v1_ms": 0.130275,
+      "speedup": 17.298,
       "reps": 3,
       "speedup_runs": [
-        17.116,
-        17.346,
-        17.794
+        17.281,
+        17.298,
+        19.559
       ],
-      "spread_pct": 3.9
+      "spread_pct": 13.2,
+      "wall_s": 34.0,
+      "raw_output": "PASS accuracy; v0=2.602890 ms, v1=0.133076 ms, speedup=19.559x"
     }
   ]
 }

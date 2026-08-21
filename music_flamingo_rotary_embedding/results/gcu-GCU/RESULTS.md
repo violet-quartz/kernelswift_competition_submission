@@ -1,0 +1,12 @@
+# 性能测试结果 — gcu-GCU
+
+- 芯片: 燧原 S60（torch 报的设备名就是 GCU；torch.cuda 也可用且指向同一块卡）
+- Python: 3.12.3 / torch: 2.10.0+cpu / triton: 3.6.0 (厂商版, backends=['gcu'])
+- 平台: Linux-5.15.0-164-generic-x86_64-with-glibc2.39
+- 测量方式: 3 轮**交替**执行（同批各 task 轮流跑，不是同一 task 连跑 N 次），
+  下表取各轮中位数。交替是为了让同批 job 共享同一份环境漂移，
+  差值里的共模噪声才能抵消。
+
+| Task | v0 (ms) | v1 (ms) | Speedup | 各轮实测 | 极差 | 结论 |
+|---|---:|---:|---:|---|---:|---|
+| music_flamingo_rotary_embedding | 0.4504 | 0.2538 | **1.78x** | 1.77 1.78 1.92 | 8.3% | ✅ 通过 |

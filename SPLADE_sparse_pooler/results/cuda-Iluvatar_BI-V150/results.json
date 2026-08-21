@@ -1,0 +1,40 @@
+{
+  "chip": "cuda-Iluvatar_BI-V150",
+  "env": {
+    "python": "3.10.18",
+    "torch": "2.7.1",
+    "triton": "3.1.0 (厂商版, backends=['iluvatar'])",
+    "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.31",
+    "chip": "cuda:Iluvatar BI-V150"
+  },
+  "bench_args": {
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "SPLADE_sparse_pooler"
+    ]
+  },
+  "results": [
+    {
+      "name": "SPLADE_sparse_pooler",
+      "status": "pass",
+      "v0_ms": 1.041566,
+      "v1_ms": 0.604101,
+      "speedup": 1.727,
+      "reps": 3,
+      "speedup_runs": [
+        1.723,
+        1.727,
+        1.73
+      ],
+      "spread_pct": 0.4,
+      "wall_s": 21.0,
+      "raw_output": "PASS accuracy; v0=1.039661 ms, v1=0.601911 ms, speedup=1.727x"
+    }
+  ]
+}

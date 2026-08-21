@@ -1,0 +1,40 @@
+{
+  "chip": "gcu-GCU",
+  "env": {
+    "python": "3.12.3",
+    "torch": "2.10.0+cpu",
+    "triton": "3.6.0 (厂商版, backends=['gcu'])",
+    "platform": "Linux-5.15.0-164-generic-x86_64-with-glibc2.39",
+    "chip": "gcu:GCU"
+  },
+  "bench_args": {
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "centre_random_augmentation"
+    ]
+  },
+  "results": [
+    {
+      "name": "centre_random_augmentation",
+      "status": "pass",
+      "v0_ms": 2.33019,
+      "v1_ms": 1.185836,
+      "speedup": 2.048,
+      "reps": 3,
+      "speedup_runs": [
+        1.965,
+        2.048,
+        2.075
+      ],
+      "spread_pct": 5.4,
+      "wall_s": 43.1,
+      "raw_output": "    *************************************************************************************************************"
+    }
+  ]
+}

@@ -182,6 +182,33 @@ def _splade_pool_kernel(
     tl.store(out_ptr + pid_s * V + offs_v, acc, mask=mask_v)
 
 
+def _default_num_warps():
+    """按后端选 num_warps。只在 __init__ 调一次。
+
+    [KS-PORT] 上面 _NUM_WARPS=4 的推导基于"num_warps × 64 个线程"（沐曦的
+    warpSize=64）和该架构约 255 的每线程寄存器上限。**燧原 S60 上这个推导整个偏了**：
+
+        _NUM_WARPS   1       2       4(原值)  8
+        speedup      1.23x   1.09x   0.84x    0.41x
+
+    单调，1 最优，0.81x → 1.23x 直接翻正。和 mhc_post 在同一块卡上的结论一致
+    （那题 1 比 4 快 5 倍）—— 这类"向量+规约、tile 小"的 kernel 在燧原上
+    线程多了只是把同一份工作切碎、增加规约深度和空转。
+
+    ⚠ 不能外推：同一条轴在天数 BI-150 的 attention 上完全无效（1/2 加进
+    autotune 候选，0.58x 纹丝不动）。num_warps 是逐卡逐题的经验值。
+
+    其余卡返回 _NUM_WARPS（原值 4），行为逐字不变。
+    """
+    try:
+        import triton
+        if "gcu" in triton.backends.backends:
+            return 1
+    except Exception:
+        pass
+    return _NUM_WARPS
+
+
 class ModelNew(nn.Module):
     """SPLADESparsePooler: MLM head logits → ReLU log(1+x) pooled over sequence (max or sum)."""
 
@@ -195,6 +222,7 @@ class ModelNew(nn.Module):
         # ⚠️ 子模块名必须逐字保持 dense / layer_norm / decoder，形状也要一致。
         #    auto_bench.py L519 的 load_state_dict 失败是**静默**的 ——
         #    改名不会报错，只会让随机初始化的权重参与计算，然后数值对拍莫名挂掉。
+        self._num_warps = _default_num_warps()
         self.dense = nn.Linear(hidden_size, hidden_size)
         self.act = nn.GELU()
         self.layer_norm = nn.LayerNorm(hidden_size, eps=1e-12)
@@ -255,7 +283,7 @@ class ModelNew(nn.Module):
             BLOCK_L=_BLOCK_L,
             BLOCK_V=_BLOCK_V,
             POOLING_MAX=(self.pooling == "max"),
-            num_warps=_NUM_WARPS,
+            num_warps=self._num_warps,
         )
 
         # ⚠️ 必须返回 **list**（S 个 [V] 张量），不能是 tuple ——

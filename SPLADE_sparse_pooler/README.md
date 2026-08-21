@@ -62,10 +62,13 @@ bash run.sh --only SPLADE_sparse_pooler
 
 ## 测试结果
 
-| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
-|---|---|---:|---:|---:|:---:|
-| SPLADE_sparse_pooler | MetaX C500 | 0.6613 | 0.2632 | **2.51x** | ✅ 通过 |
-| SPLADE_sparse_pooler | Ascend 910B2C | 0.3114 | 0.1538 | **2.04x** | ✅ 通过 |
+| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 各轮实测 | 极差 | 结论 |
+|---|---|---:|---:|---:|---|---:|:---:|
+| SPLADE_sparse_pooler | MetaX C500 | 0.6613 | 0.2632 | **2.51x** | — | — | ✅ 通过 |
+| SPLADE_sparse_pooler | Ascend 910B2C | 0.3107 | 0.1487 | **2.08x** | 2.08 2.08 2.10 | 1.2% | ✅ 通过 |
+| SPLADE_sparse_pooler | Iluvatar BI-V150 | 1.0416 | 0.6041 | **1.73x** | 1.72 1.73 1.73 | 0.4% | ✅ 通过 |
+| SPLADE_sparse_pooler | Enflame S60 | 0.8701 | 0.7562 | **1.21x** | 1.11 1.21 1.30 | 15.6% | ✅ 通过 |
+| SPLADE_sparse_pooler | Hygon BW1000 | 1.0024 | 0.5918 | **1.69x** | 1.69 1.70 | 0.9% | ✅ 通过 |
 
 由 `bash run.sh --only SPLADE_sparse_pooler` 产出，原始数据见
 `results/cuda-MetaX_C500/{RESULTS.md,results.json}`（2026-08-19）。

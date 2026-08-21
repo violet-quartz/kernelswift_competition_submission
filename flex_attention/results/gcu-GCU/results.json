@@ -1,0 +1,40 @@
+{
+  "chip": "gcu-GCU",
+  "env": {
+    "python": "3.12.3",
+    "torch": "2.10.0+cpu",
+    "triton": "3.6.0 (厂商版, backends=['gcu'])",
+    "platform": "Linux-5.15.0-164-generic-x86_64-with-glibc2.39",
+    "chip": "gcu:GCU"
+  },
+  "bench_args": {
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "flex_attention"
+    ]
+  },
+  "results": [
+    {
+      "name": "flex_attention",
+      "status": "pass",
+      "v0_ms": 0.240177,
+      "v1_ms": 0.281923,
+      "speedup": 0.852,
+      "reps": 3,
+      "speedup_runs": [
+        0.852,
+        0.852,
+        0.856
+      ],
+      "spread_pct": 0.5,
+      "wall_s": 34.5,
+      "raw_output": "  warnings.warn(msg, ImportWarning)"
+    }
+  ]
+}

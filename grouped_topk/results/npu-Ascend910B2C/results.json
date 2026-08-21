@@ -2,39 +2,39 @@
   "chip": "npu-Ascend910B2C",
   "env": {
     "python": "3.11.14",
-    "platform": "Linux-5.15.0-113-generic-x86_64-with-glibc2.38",
-    "chip": "npu:Ascend910B2C",
     "torch": "2.9.0+cpu",
-    "triton": "3.2.0 (triton-ascend, backends=['ascend'])"
+    "triton": "3.2.0 (triton-ascend, backends=['ascend'])",
+    "platform": "Linux-5.15.0-113-generic-x86_64-with-glibc2.38",
+    "chip": "npu:Ascend910B2C"
   },
   "bench_args": {
-    "chip": "auto",
-    "only": [
-      "grouped_topk"
-    ],
     "warmup": 200,
     "repeat": 500,
     "seed": 42,
     "atol": 0.01,
     "rtol": 0.01,
-    "reps": 3
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "grouped_topk"
+    ]
   },
   "results": [
     {
       "name": "grouped_topk",
-      "wall_s": 38.9,
-      "raw_output": "PASS accuracy; v0=0.177819 ms, v1=0.125059 ms, speedup=1.422x",
       "status": "pass",
-      "v0_ms": 0.176381,
-      "v1_ms": 0.121901,
-      "speedup": 1.443,
+      "v0_ms": 0.17422,
+      "v1_ms": 0.119649,
+      "speedup": 1.456,
       "reps": 3,
       "speedup_runs": [
         1.422,
-        1.443,
-        1.454
+        1.456,
+        1.48
       ],
-      "spread_pct": 2.2
+      "spread_pct": 4.0,
+      "wall_s": 27.1,
+      "raw_output": "PASS accuracy; v0=0.174220 ms, v1=0.119649 ms, speedup=1.456x"
     }
   ]
 }

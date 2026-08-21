@@ -62,9 +62,12 @@ bash run.sh --only centre_random_augmentation
 
 ## 测试结果
 
-| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 结论 |
-|---|---|---:|---:|---:|:---:|
-| centre_random_augmentation | MetaX C500 | 1.0032 | 0.1711 | **5.86x** | ✅ 通过 |
-| centre_random_augmentation | Ascend 910B2C | 0.5111 | 0.2455 | **2.04x** | ✅ 通过 |
+| Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 各轮实测 | 极差 | 结论 |
+|---|---|---:|---:|---:|---|---:|:---:|
+| centre_random_augmentation | MetaX C500 | 1.0032 | 0.1711 | **5.86x** | — | — | ✅ 通过 |
+| centre_random_augmentation | Ascend 910B2C | 0.4925 | 0.2360 | **2.16x** | 2.06 2.16 2.33 | 12.7% | ✅ 通过 |
+| centre_random_augmentation | Iluvatar BI-V150 | 1.0019 | 0.2568 | **3.90x** | 3.86 3.90 3.92 | 1.4% | ✅ 通过 |
+| centre_random_augmentation | Enflame S60 | 2.3302 | 1.1858 | **2.05x** | 1.97 2.05 2.08 | 5.4% | ✅ 通过 |
+| centre_random_augmentation | Hygon BW1000 | 1.2264 | 0.2850 | **4.19x** | 4.08 4.19 4.47 | 9.3% | ✅ 通过 |
 
 昇腾数据取 3 轮**交替**执行的中位数（各轮 2.00 2.04 2.13，极差 6.0%），明细见 `results/npu-Ascend910B2C/`。

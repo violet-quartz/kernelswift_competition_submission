@@ -1,0 +1,40 @@
+{
+  "chip": "cuda-Iluvatar_BI-V150",
+  "env": {
+    "python": "3.10.18",
+    "torch": "2.7.1",
+    "triton": "3.1.0 (厂商版, backends=['iluvatar'])",
+    "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.31",
+    "chip": "cuda:Iluvatar BI-V150"
+  },
+  "bench_args": {
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "fused_moe"
+    ]
+  },
+  "results": [
+    {
+      "name": "fused_moe",
+      "status": "pass",
+      "v0_ms": 3.055636,
+      "v1_ms": 0.330454,
+      "speedup": 9.236,
+      "reps": 3,
+      "speedup_runs": [
+        9.228,
+        9.236,
+        9.319
+      ],
+      "spread_pct": 1.0,
+      "wall_s": 62.2,
+      "raw_output": "PASS accuracy; v0=3.049589 ms, v1=0.330454 ms, speedup=9.228x"
+    }
+  ]
+}

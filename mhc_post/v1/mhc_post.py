@@ -146,6 +146,37 @@ def _env_int(name: str):
         return None
 
 
+def _default_num_warps():
+    """按后端选 num_warps 的默认值。只在 __init__ 调一次。
+
+    [KS-PORT] 本文件原本"刻意不设 num_warps"，理由是沐曦上 hc_split_sinkhorn
+    撞过 make_ttgir 段错误、而 num_warps 直接影响那个通路。那个理由在燧原上
+    不成立，代价是踩了后端默认值的坑 —— **燧原 S60 的默认值 4 是灾难性的**：
+
+        num_warps    1      2      4(默认)   8      16
+        speedup      0.80x  0.30x  0.16x     0.09x  0.09x
+
+    极差全是 0.0%，纯系统性，不是噪声。改成 1 即 5 倍。
+    原因：这个 kernel 的主体是外积累加，纯向量运算、全程没有规约，
+    线程多了只是把同一份工作切碎、增加空转。（试过 tl.dot 想落到矩阵单元上，
+    但 M=K=4 远低于最小 tile，padding 到 16 的 4x 冗余把好处抵消了：0.77x，
+    反而略差于外积的 0.79x；bf16 版精度还不够，max_abs_diff=0.125。）
+
+    ⚠ 这条**不能外推**：同一条轴在天数 BI-150 的 attention 上完全无效
+    （把 1/2 加进 autotune 候选，0.58x 纹丝不动）。num_warps 是逐卡逐题的。
+
+    其余卡保持原样（返回 None = 不传，用后端默认值），沐曦的行为逐字不变。
+    KS_NUM_WARPS 仍然覆盖本函数。
+    """
+    try:
+        import triton
+        if "gcu" in triton.backends.backends:
+            return 1
+    except Exception:
+        pass
+    return None
+
+
 def _ks_bootstrap():
     """按需导入后端扩展，让 torch.npu / torch.mlu 命名空间真正出现。
 
@@ -255,7 +286,7 @@ class ModelNew(nn.Module):
         # 三个都不设时行为跟没有这段代码完全一样：BLOCK_H 由 _pick_block_h 挑，
         # num_warps/num_stages 用后端默认值。
         self._block_h_override = _env_int("KS_BLOCK_H")
-        self._num_warps = _env_int("KS_NUM_WARPS")
+        self._num_warps = _env_int("KS_NUM_WARPS") or _default_num_warps()
         self._num_stages = _env_int("KS_NUM_STAGES")
         tuned = {k: v for k, v in (
             ("BLOCK_H", self._block_h_override),

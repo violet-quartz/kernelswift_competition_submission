@@ -132,6 +132,30 @@ def _default_block_size():
     return 1024
 
 
+def _use_atomic_reduce():
+    """能不能用 tl.atomic_add 做规约。只在 __init__ 调一次。
+
+    [KS-PORT] 燧原 S60（triton backends=['gcu']）**不支持 atomic**，
+    tt.atomic_rmw 被后端明确标为非法，编译直接失败。其余卡都支持。
+
+    判据写成**黑名单**（已知不支持的才走回退路径），因为 atomic 是 Triton 的
+    通用能力、不支持才是例外 —— 这和 K_CONTIG 那种"只有实测赢过才切"的
+    白名单方向相反，因为那是性能取舍、这是能力有无。
+
+    KS_ATOMIC_REDUCE=0/1 可覆盖。给它环境变量是有教训的：K_CONTIG 当初被当成
+    纯硬能力开关、没留覆盖口，结果想在别的卡上验"回退路径是不是反而更快"时
+    只能改代码。能力开关也可能同时是性能轴。
+    """
+    raw = os.environ.get("KS_ATOMIC_REDUCE")
+    if raw:
+        return raw not in ("0", "false", "False")
+    try:
+        import triton
+        return "gcu" not in triton.backends.backends
+    except Exception:
+        return True
+
+
 def _ks_bootstrap():
     """按需导入后端扩展，让 torch.npu / torch.mlu 命名空间真正出现。
 
@@ -170,7 +194,8 @@ def _head_compute_mix_bwd_kernel(
     N0: tl.constexpr,
     N1: tl.constexpr,
     M: tl.constexpr,
-    BLOCK_ROWS: tl.constexpr
+    BLOCK_ROWS: tl.constexpr,
+    ATOMIC_REDUCE: tl.constexpr,   # 见 _use_atomic_reduce()
 ):
     """每个 program 处理 BLOCK_ROWS 行，两个规约用 atomic_add 汇总。
 
@@ -204,8 +229,20 @@ def _head_compute_mix_bwd_kernel(
     grad_z = g * s * (1.0 - s)
 
     tl.store(grad_input_mix_ptr + offset, grad_z * scale, mask=mask)
-    tl.atomic_add(grad_mhc_scale_ptr, tl.sum(grad_z * x))
-    tl.atomic_add(grad_mhc_base_ptr + lanes, tl.sum(grad_z, axis=0))
+
+    # [KS-PORT] 两条规约路径，硬能力差异：
+    #   * 燧原 S60 **不支持 atomic**，编译期就被拒：
+    #         failed to legalize operation 'tt.atomic_rmw' that was explicitly marked illegal
+    #     只能各 program 写各自的槽位，最后由 host 侧收尾。
+    #   * 其余卡用 atomic 一步到位，省掉那次 host 规约。
+    # ATOMIC_REDUCE 是 tl.constexpr，没被选中的那支编译期就折掉。
+    if ATOMIC_REDUCE:
+        tl.atomic_add(grad_mhc_scale_ptr, tl.sum(grad_z * x))
+        tl.atomic_add(grad_mhc_base_ptr + lanes, tl.sum(grad_z, axis=0))
+    else:
+        # 每个槽位恰好被写一次，所以调用方**不需要预清零**（省掉一次 memset）。
+        tl.store(grad_mhc_scale_ptr + pid, tl.sum(grad_z * x))
+        tl.store(grad_mhc_base_ptr + pid * M + lanes, tl.sum(grad_z, axis=0))
 
 
 class ModelNew(nn.Module):
@@ -214,6 +251,7 @@ class ModelNew(nn.Module):
         # 环境变量在 __init__ 里读一次，不放 forward 里 —— 这道题 host-bound，
         # 被计时的路径上多一次 os.environ 查询都是实打实的成本。
         self._block_size = _env_int("KS_BLOCK_SIZE") or _default_block_size()
+        self._atomic_reduce = _use_atomic_reduce()
 
     def forward(
         self,
@@ -239,16 +277,24 @@ class ModelNew(nn.Module):
 
         grad_input_mix = torch.empty((n0, n1, mhc_mult), dtype=torch.float32, device=dev)
 
-        # 两个规约输出合用一个零初始化缓冲区：一次 memset 代替两次，host 侧也少走
-        # 一整条分配路径。第一版那两个 torch.zeros 在 profiling 里占了一半的设备
-        # 时间（6.14 / 12.34 us），而它们一共只清 20 字节。
-        # 下面两行切片都是 view，不产生 kernel、不额外分配。
-        acc = torch.zeros(_ACC_PAD + mhc_mult, dtype=torch.float32, device=dev)
-        grad_mhc_scale = acc[:1]
-        grad_mhc_base = acc[_ACC_PAD:]
-
         block_rows = self._block_size // mhc_mult
         num_programs = triton.cdiv(n0 * n1 * mhc_mult, self._block_size)
+
+        if self._atomic_reduce:
+            # 两个规约输出合用一个零初始化缓冲区：一次 memset 代替两次，host 侧也少走
+            # 一整条分配路径。第一版那两个 torch.zeros 在 profiling 里占了一半的设备
+            # 时间（6.14 / 12.34 us），而它们一共只清 20 字节。
+            # 下面两行切片都是 view，不产生 kernel、不额外分配。
+            acc = torch.zeros(_ACC_PAD + mhc_mult, dtype=torch.float32, device=dev)
+            grad_mhc_scale = acc[:1]
+            grad_mhc_base = acc[_ACC_PAD:]
+        else:
+            # [KS-PORT] 无 atomic 的回退：每 program 一个槽位，kernel 全写一遍，
+            # 所以用 torch.empty（不需要 memset），规约留给 host 侧的两次 sum。
+            part_scale = torch.empty(num_programs, dtype=torch.float32, device=dev)
+            part_base = torch.empty(num_programs * mhc_mult, dtype=torch.float32, device=dev)
+            grad_mhc_scale = part_scale
+            grad_mhc_base = part_base
 
         _head_compute_mix_bwd_kernel[(num_programs,)](
             input_mix,
@@ -259,7 +305,14 @@ class ModelNew(nn.Module):
             grad_mhc_scale,
             grad_mhc_base,
             N0=n0, N1=n1, M=mhc_mult, BLOCK_ROWS=block_rows,
+            ATOMIC_REDUCE=self._atomic_reduce,
         )
+
+        if not self._atomic_reduce:
+            # kernel 写的是 (num_programs,) 和 (num_programs, M)，这里收成最终形状
+            grad_mhc_scale = part_scale.sum(0, keepdim=True)              # (1,)
+            grad_mhc_base = part_base.view(num_programs, mhc_mult).sum(0)  # (M,)
+
         return grad_input_mix, grad_mhc_scale, grad_mhc_base
 
 

@@ -2,39 +2,39 @@
   "chip": "npu-Ascend910B2C",
   "env": {
     "python": "3.11.14",
-    "platform": "Linux-5.15.0-113-generic-x86_64-with-glibc2.38",
-    "chip": "npu:Ascend910B2C",
     "torch": "2.9.0+cpu",
-    "triton": "3.2.0 (triton-ascend, backends=['ascend'])"
+    "triton": "3.2.0 (triton-ascend, backends=['ascend'])",
+    "platform": "Linux-5.15.0-113-generic-x86_64-with-glibc2.38",
+    "chip": "npu:Ascend910B2C"
   },
   "bench_args": {
-    "chip": "auto",
-    "only": [
-      "mm_encoder_attention"
-    ],
     "warmup": 200,
     "repeat": 500,
     "seed": 42,
     "atol": 0.01,
     "rtol": 0.01,
-    "reps": 3
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "mm_encoder_attention"
+    ]
   },
   "results": [
     {
       "name": "mm_encoder_attention",
-      "wall_s": 28.4,
-      "raw_output": "PASS accuracy; v0=0.135911 ms, v1=0.092773 ms, speedup=1.465x",
       "status": "pass",
-      "v0_ms": 0.134646,
-      "v1_ms": 0.093358,
-      "speedup": 1.442,
+      "v0_ms": 0.136946,
+      "v1_ms": 0.093868,
+      "speedup": 1.459,
       "reps": 3,
       "speedup_runs": [
-        1.406,
-        1.442,
-        1.465
+        1.451,
+        1.459,
+        1.461
       ],
-      "spread_pct": 4.1
+      "spread_pct": 0.7,
+      "wall_s": 26.1,
+      "raw_output": "PASS accuracy; v0=0.141490 ms, v1=0.096873 ms, speedup=1.461x"
     }
   ]
 }

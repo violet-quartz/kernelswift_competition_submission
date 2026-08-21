@@ -1,0 +1,40 @@
+{
+  "chip": "cuda-BW",
+  "env": {
+    "python": "3.10.12",
+    "torch": "2.10.0",
+    "triton": "3.8.0 (厂商版, backends=['amd','hcu','nvidia'])",
+    "platform": "Linux-5.15.0-25-generic-x86_64-with-glibc2.35",
+    "chip": "cuda:BW"
+  },
+  "bench_args": {
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "music_flamingo_rotary_embedding"
+    ]
+  },
+  "results": [
+    {
+      "name": "music_flamingo_rotary_embedding",
+      "status": "pass",
+      "v0_ms": 0.323773,
+      "v1_ms": 0.158457,
+      "speedup": 2.072,
+      "reps": 3,
+      "speedup_runs": [
+        2.043,
+        2.072,
+        2.088
+      ],
+      "spread_pct": 2.2,
+      "wall_s": 58.8,
+      "raw_output": "Summary: 1 passed, 0 failed, 1 total."
+    }
+  ]
+}

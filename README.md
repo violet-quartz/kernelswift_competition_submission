@@ -19,31 +19,32 @@
 
 ## 跨芯片加速比总览
 
-| 赛题 | 赛题名 | 算子 | MetaX C500 | Ascend 910B2C |
-|---|---|---|---:|---:|
-| Task01 | GroupedTopk | `grouped_topk` | 2.75x | **1.44x** |
-| Task02 | FusedMoE | `fused_moe` | 17.58x | **17.35x** |
-| Task03 | FlexAttention | `flex_attention` | 1.06x | **1.70x** |
-| Task04 | SPLADESparsePooler | `SPLADE_sparse_pooler` | 2.51x | **2.04x** |
-| Task05 | MusicFlamingoRotaryEmbedding | `music_flamingo_rotary_embedding` | 1.98x | **1.43x** |
-| Task06 | MMEncoderAttention | `mm_encoder_attention` | 1.05x | **1.44x** |
-| Task07 | mhc_post | `mhc_post` | 12.36x | **2.85x** |
-| Task08 | hc_split_sinkhorn | `hc_split_sinkhorn` | 14.75x | **7.86x** |
-| Task09 | CentreRandomAugmentation | `centre_random_augmentation` | 5.86x | **2.04x** |
-| Task10 | head_compute_mix_bwd | `head_compute_mix_bwd` | 1.58x | 0.86x |
-| | | **几何平均** | **3.68x** | **2.42x** |
+| 赛题 | 算子 | MetaX C500 | Ascend 910B2C | Iluvatar BI-V150 | Enflame S60 | Hygon BW1000 |
+|---|---|---:|---:|---:|---:|---:|
+| Task01 | `grouped_topk` | **2.75x** | **1.46x** | **2.79x** | **1.55x** | **2.24x** |
+| Task02 | `fused_moe` | **17.58x** | **17.30x** | **9.24x** | **17.75x** | **14.00x** |
+| Task03 | `flex_attention` | **1.06x** | **1.70x** | 0.62x | 0.85x | **1.06x** |
+| Task04 | `SPLADE_sparse_pooler` | **2.51x** | **2.08x** | **1.73x** | **1.21x** | **1.69x** |
+| Task05 | `music_flamingo_rotary_embedding` | **1.98x** | **1.39x** | **2.20x** | **1.78x** | **2.07x** |
+| Task06 | `mm_encoder_attention` | **1.05x** | **1.46x** | 0.63x | 0.74x | **1.06x** |
+| Task07 | `mhc_post` | **12.36x** | **2.88x** | **16.95x** | 0.80x | **7.45x** |
+| Task08 | `hc_split_sinkhorn` | **14.75x** | **7.81x** | **8.35x** | **5.11x** | **10.01x** |
+| Task09 | `centre_random_augmentation` | **5.86x** | **2.16x** | **3.90x** | **2.05x** | **4.19x** |
+| Task10 | `head_compute_mix_bwd` | **1.58x** | 0.85x | **1.94x** | **1.04x** | **1.03x** |
+| | **几何平均** | **3.68x** | **2.44x** | **2.89x** | **1.78x** | **2.88x** |
 
-两块卡都是 10/10 通过。昇腾数据取 3 轮**交替**执行的中位数，明细在各题的
-`results/npu-Ascend910B2C/`；沐曦的在 `results/cuda-MetaX_C500/`。
+五块卡**全部 10/10 通过**。加粗 = 快于 v0。数据取 3 轮**交替**执行的中位数，
+逐轮值和极差见各题 README 与 `results/<芯片>/`。
 
-四道题的 v1 在两块卡上走**不同的 `tl.constexpr` 分支**（`grouped_topk`、
-`flex_attention`、`mm_encoder_attention`、`head_compute_mix_bwd`）。开关按**能力**
-命名而不是芯片名，编译期折叠、实测运行时开销为零。分支的由来和各自的实测依据
-写在对应 v1 文件的 `[KS-PORT]` 注释里。
+**沐曦那一列是早期单次测量**，没有逐轮数据，和其余四列不完全可比 ——
+那台机器目前离线，等恢复后按同样方式重测。
 
-两题的排序在两块卡上**反了**：`flex_attention` 和 `mm_encoder_attention` 在沐曦上
-只有 1.06x / 1.05x，在昇腾上却是 1.70x / 1.44x。昇腾那边用的优化（因果掩码预算好
-从显存载入）未必是昇腾特有的，很可能在沐曦上同样有效 —— 待复测。
+四道题的 v1 在不同卡上走**不同的 `tl.constexpr` 分支**（`grouped_topk`、
+`flex_attention`、`mm_encoder_attention`、`head_compute_mix_bwd`），另有两道
+按后端选常量（`mhc_post`、`SPLADE_sparse_pooler` 的 `num_warps`）。开关按**能力**
+命名而不是芯片名，编译期折叠、实测运行时开销为零。由来和实测依据写在对应 v1 文件的
+`[KS-PORT]` 注释里。
 
-`head_compute_mix_bwd` 是唯一在昇腾上慢于 v0 的一题（0.86x），原因是结构性的，
-见该题 README。
+**海光 BW1000 是唯一十题全部快于 v0 的卡。** 两道 attention 题在其余卡上普遍吃亏，
+根源是 Inductor 会把 v0 直接降成厂商的 `_scaled_dot_product_flash_attention`，
+手写 Triton 的对手其实是厂商优化过的库；昇腾例外，那里的收益来自预计算因果掩码。
