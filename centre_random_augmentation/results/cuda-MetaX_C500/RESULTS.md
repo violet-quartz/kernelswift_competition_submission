@@ -1,11 +1,12 @@
 # 性能测试结果 — cuda-MetaX_C500
 
-- 生成时间: 2026-08-16 07:27:20
-- Python: 3.10.10 / torch: 2.8.0+metax3.3.0.2 / triton: 3.0.0
-- 平台: Linux-5.15.0-58-generic-x86_64-with-glibc2.39
+- 芯片: 沐曦 MetaX C500（MACA 3.3.0.15 / KMD 3.8.30）
+- Python: 3.10.10 / torch: 2.8.0+metax3.3.0.2 / triton: 3.0.0 (厂商版, backends=['metax'])
+- 平台: Linux-x86_64
+- 测量方式: 3 轮**交替**执行（同批各 task 轮流跑，不是同一 task 连跑 N 次），
+  下表取各轮中位数。交替是为了让同批 job 共享同一份环境漂移，
+  差值里的共模噪声才能抵消。
 
-| Task | v0 (ms) | v1 (ms) | Speedup | 结论 |
-|---|---:|---:|---:|---|
-| centre_random_augmentation | 1.0032 | 0.1711 | **5.86x** | ✅ 通过 |
-
-**通过 1/1 题，几何平均加速比 5.86x**
+| Task | v0 (ms) | v1 (ms) | Speedup | 各轮实测 | 极差 | 结论 |
+|---|---:|---:|---:|---|---:|---|
+| centre_random_augmentation | 0.9840 | 0.1725 | **5.70x** | 5.67 5.70 8.14 | 43.5% | ✅ 通过 |

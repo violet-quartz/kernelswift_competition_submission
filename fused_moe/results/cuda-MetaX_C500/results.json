@@ -2,31 +2,39 @@
   "chip": "cuda-MetaX_C500",
   "env": {
     "python": "3.10.10",
-    "platform": "Linux-5.15.0-58-generic-x86_64-with-glibc2.39",
-    "chip": "cuda:MetaX C500",
     "torch": "2.8.0+metax3.3.0.2",
-    "triton": "3.0.0"
+    "triton": "3.0.0 (厂商版, backends=['metax'])",
+    "platform": "Linux-x86_64",
+    "chip": "cuda:MetaX C500"
   },
   "bench_args": {
-    "chip": "auto",
-    "only": [
-      "fused_moe"
-    ],
     "warmup": 200,
     "repeat": 500,
     "seed": 42,
     "atol": 0.01,
-    "rtol": 0.01
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "fused_moe"
+    ]
   },
   "results": [
     {
       "name": "fused_moe",
-      "wall_s": 16.9,
-      "raw_output": "Triton autotuning for function _moe_expert_kernel finished after 1.58s; best config selected: BLOCK_T: 32, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None;\nTriton autotuning for function _moe_reduce_kernel finished after 0.55s; best config selected: BLOCK_T: 32, num_warps: 8, num_ctas: 1, num_stages: 1, maxnreg: None;\nPASS accuracy; v0=3.020563 ms, v1=0.171804 ms, speedup=17.581x\n\nSummary: 1 passed, 0 failed, 1 total.",
       "status": "pass",
-      "v0_ms": 3.020563,
-      "v1_ms": 0.171804,
-      "speedup": 17.581
+      "v0_ms": 3.016739,
+      "v1_ms": 0.174705,
+      "speedup": 17.16,
+      "reps": 3,
+      "speedup_runs": [
+        17.139,
+        17.16,
+        17.773
+      ],
+      "spread_pct": 3.7,
+      "wall_s": 60.2,
+      "raw_output": "PASS accuracy; v0=3.104949 ms, v1=0.174705 ms, speedup=17.773x"
     }
   ]
 }

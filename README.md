@@ -24,19 +24,19 @@
 
 ## 跨芯片加速比总览
 
-| 赛题 | 算子 | MetaX C500 | Ascend 910B2C | Iluvatar BI-V150 | Enflame S60 | Hygon BW1000 |
-|---|---|---:|---:|---:|---:|---:|
-| Task01 | `grouped_topk` | **2.75x** | **1.46x** | **2.79x** | **1.55x** | **2.24x** |
-| Task02 | `fused_moe` | **17.58x** | **17.30x** | **9.24x** | **17.75x** | **14.00x** |
-| Task03 | `flex_attention` | **1.06x** | **1.70x** | 0.62x | 0.85x | **1.06x** |
-| Task04 | `SPLADE_sparse_pooler` | **2.51x** | **2.08x** | **1.73x** | **1.21x** | **1.69x** |
-| Task05 | `music_flamingo_rotary_embedding` | **1.98x** | **1.39x** | **2.20x** | **1.78x** | **2.07x** |
-| Task06 | `mm_encoder_attention` | **1.05x** | **1.46x** | 0.63x | 0.74x | **1.06x** |
-| Task07 | `mhc_post` | **12.36x** | **2.88x** | **16.95x** | 0.80x | **7.45x** |
-| Task08 | `hc_split_sinkhorn` | **14.75x** | **7.81x** | **8.35x** | **5.11x** | **10.01x** |
-| Task09 | `centre_random_augmentation` | **5.86x** | **2.16x** | **3.90x** | **2.05x** | **4.19x** |
-| Task10 | `head_compute_mix_bwd` | **1.58x** | 0.85x | **1.94x** | **1.04x** | **1.03x** |
-| | **几何平均** | **3.68x** | **2.44x** | **2.89x** | **1.78x** | **2.88x** |
+| 赛题 | 赛题名 | 算子 | MetaX C500 | Ascend 910B2C | Iluvatar BI-V150 | Enflame S60 | Hygon BW1000 | MTT S4000 |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Task01 | GroupedTopk | `grouped_topk` | **3.06x** | **1.46x** | **2.79x** | **1.55x** | **2.24x** | ✗ |
+| Task02 | FusedMoE | `fused_moe` | **17.16x** | **17.30x** | **9.24x** | **17.75x** | **14.00x** | ✗ |
+| Task03 | FlexAttention | `flex_attention` | **1.06x** | **1.70x** | 0.62x | 0.85x | **1.06x** | ✗ |
+| Task04 | SPLADESparsePooler | `SPLADE_sparse_pooler` | **2.50x** | **2.08x** | **1.73x** | **1.21x** | **1.69x** | ✗ |
+| Task05 | MusicFlamingoRotaryEmbedding | `music_flamingo_rotary_embedding` | **2.10x** | **1.39x** | **2.20x** | **1.78x** | **2.07x** | **3.34x** |
+| Task06 | MMEncoderAttention | `mm_encoder_attention` | **1.09x** | **1.46x** | 0.63x | 0.74x | **1.06x** | ✗ |
+| Task07 | mhc_post | `mhc_post` | **12.42x** | **2.88x** | **16.95x** | 0.80x | **7.45x** | **10.18x** |
+| Task08 | hc_split_sinkhorn | `hc_split_sinkhorn` | **14.19x** | **7.81x** | **8.35x** | **5.11x** | **10.01x** | **26.24x** |
+| Task09 | CentreRandomAugmentation | `centre_random_augmentation` | **5.70x** | **2.16x** | **3.90x** | **2.05x** | **4.19x** | ✗ |
+| Task10 | head_compute_mix_bwd | `head_compute_mix_bwd` | **1.85x** | 0.85x | **1.94x** | **1.04x** | **1.03x** | ✗ |
+| | | **几何平均** | **3.78x** | **2.44x** | **2.89x** | **1.78x** | **2.88x** | —（3/10） |
 
 五块卡**全部 10/10 通过**。加粗 = 快于 v0。数据取 3 轮**交替**执行的中位数，
 逐轮值和极差见各题 README 与 `results/<芯片>/`。

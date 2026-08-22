@@ -2,31 +2,39 @@
   "chip": "cuda-MetaX_C500",
   "env": {
     "python": "3.10.10",
-    "platform": "Linux-5.15.0-58-generic-x86_64-with-glibc2.39",
-    "chip": "cuda:MetaX C500",
     "torch": "2.8.0+metax3.3.0.2",
-    "triton": "3.0.0"
+    "triton": "3.0.0 (厂商版, backends=['metax'])",
+    "platform": "Linux-x86_64",
+    "chip": "cuda:MetaX C500"
   },
   "bench_args": {
-    "chip": "auto",
-    "only": [
-      "mhc_post"
-    ],
     "warmup": 200,
     "repeat": 500,
     "seed": 42,
     "atol": 0.01,
-    "rtol": 0.01
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "mhc_post"
+    ]
   },
   "results": [
     {
       "name": "mhc_post",
-      "wall_s": 22.6,
-      "raw_output": "PASS accuracy; v0=6.121619 ms, v1=0.495198 ms, speedup=12.362x\n\nSummary: 1 passed, 0 failed, 1 total.",
       "status": "pass",
-      "v0_ms": 6.121619,
-      "v1_ms": 0.495198,
-      "speedup": 12.362
+      "v0_ms": 6.137585,
+      "v1_ms": 0.49365,
+      "speedup": 12.418,
+      "reps": 3,
+      "speedup_runs": [
+        12.359,
+        12.418,
+        12.462
+      ],
+      "spread_pct": 0.8,
+      "wall_s": 67.5,
+      "raw_output": "PASS accuracy; v0=6.137585 ms, v1=0.496620 ms, speedup=12.359x"
     }
   ]
 }

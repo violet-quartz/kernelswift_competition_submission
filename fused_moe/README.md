@@ -73,11 +73,12 @@ bash run.sh --only fused_moe
 
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 各轮实测 | 极差 | 结论 |
 |---|---|---:|---:|---:|---|---:|:---:|
-| fused_moe | MetaX C500 | 3.0206 | 0.1718 | **17.58x** | — | — | ✅ 通过 |
+| fused_moe | MetaX C500 | 3.0167 | 0.1747 | **17.16x** | 17.14 17.16 17.77 | 3.7% | ✅ 通过 |
 | fused_moe | Ascend 910B2C | 2.2535 | 0.1303 | **17.30x** | 17.28 17.30 19.56 | 13.2% | ✅ 通过 |
 | fused_moe | Iluvatar BI-V150 | 3.0556 | 0.3305 | **9.24x** | 9.23 9.24 9.32 | 1.0% | ✅ 通过 |
 | fused_moe | Enflame S60 | 5.3052 | 0.2930 | **17.75x** | 16.94 17.75 18.61 | 9.4% | ✅ 通过 |
 | fused_moe | Hygon BW1000 | 3.5957 | 0.2575 | **14.00x** | 13.73 14.00 14.64 | 6.5% | ✅ 通过 |
+| fused_moe | MTT S4000 | — | — | — | — | — | ❌ 编译失败 |
 
 由 `bash run.sh --only fused_moe` 产出，原始数据见
 `results/cuda-MetaX_C500/{RESULTS.md,results.json}`（2026-08-19）。

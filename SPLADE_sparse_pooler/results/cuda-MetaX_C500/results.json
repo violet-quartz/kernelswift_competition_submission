@@ -2,31 +2,39 @@
   "chip": "cuda-MetaX_C500",
   "env": {
     "python": "3.10.10",
-    "platform": "Linux-5.15.0-58-generic-x86_64-with-glibc2.39",
-    "chip": "cuda:MetaX C500",
     "torch": "2.8.0+metax3.3.0.2",
-    "triton": "3.0.0"
+    "triton": "3.0.0 (厂商版, backends=['metax'])",
+    "platform": "Linux-x86_64",
+    "chip": "cuda:MetaX C500"
   },
   "bench_args": {
-    "chip": "auto",
-    "only": [
-      "SPLADE_sparse_pooler"
-    ],
     "warmup": 200,
     "repeat": 500,
     "seed": 42,
     "atol": 0.01,
-    "rtol": 0.01
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "SPLADE_sparse_pooler"
+    ]
   },
   "results": [
     {
       "name": "SPLADE_sparse_pooler",
-      "wall_s": 13.5,
-      "raw_output": "PASS accuracy; v0=0.661272 ms, v1=0.263223 ms, speedup=2.512x\n\nSummary: 1 passed, 0 failed, 1 total.",
       "status": "pass",
-      "v0_ms": 0.661272,
-      "v1_ms": 0.263223,
-      "speedup": 2.512
+      "v0_ms": 0.678303,
+      "v1_ms": 0.270904,
+      "speedup": 2.504,
+      "reps": 3,
+      "speedup_runs": [
+        2.503,
+        2.504,
+        2.507
+      ],
+      "spread_pct": 0.2,
+      "wall_s": 42.0,
+      "raw_output": "PASS accuracy; v0=0.678303 ms, v1=0.270904 ms, speedup=2.504x"
     }
   ]
 }

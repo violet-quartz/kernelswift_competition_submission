@@ -64,10 +64,11 @@ bash run.sh --only music_flamingo_rotary_embedding
 
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 各轮实测 | 极差 | 结论 |
 |---|---|---:|---:|---:|---|---:|:---:|
-| music_flamingo_rotary_embedding | MetaX C500 | 0.2223 | 0.1124 | **1.98x** | — | — | ✅ 通过 |
+| music_flamingo_rotary_embedding | MetaX C500 | 0.2351 | 0.1109 | **2.10x** | 2.10 2.10 2.37 | 12.7% | ✅ 通过 |
 | music_flamingo_rotary_embedding | Ascend 910B2C | 0.1011 | 0.0762 | **1.39x** | 1.32 1.39 1.44 | 9.0% | ✅ 通过 |
 | music_flamingo_rotary_embedding | Iluvatar BI-V150 | 0.3319 | 0.1507 | **2.20x** | 2.16 2.20 2.21 | 2.2% | ✅ 通过 |
 | music_flamingo_rotary_embedding | Enflame S60 | 0.4504 | 0.2538 | **1.78x** | 1.77 1.78 1.92 | 8.3% | ✅ 通过 |
 | music_flamingo_rotary_embedding | Hygon BW1000 | 0.3238 | 0.1585 | **2.07x** | 2.04 2.07 2.09 | 2.2% | ✅ 通过 |
+| music_flamingo_rotary_embedding | MTT S4000 | 0.3533 | 0.1059 | **3.34x** | 3.34 | 0.0% | ✅ 通过 |
 
 昇腾数据取 3 轮**交替**执行的中位数（各轮 1.41 1.43 1.74，极差 23.5%），明细见 `results/npu-Ascend910B2C/`。

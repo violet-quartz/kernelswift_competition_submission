@@ -65,10 +65,11 @@ bash run.sh --only hc_split_sinkhorn
 
 | Task | 芯片 | v0 (ms) | v1 (ms) | Speedup | 各轮实测 | 极差 | 结论 |
 |---|---|---:|---:|---:|---|---:|:---:|
-| hc_split_sinkhorn | MetaX C500 | 1.6087 | 0.1091 | **14.75x** | — | — | ✅ 通过 |
+| hc_split_sinkhorn | MetaX C500 | 1.5870 | 0.1119 | **14.19x** | 13.03 14.19 15.43 | 16.9% | ✅ 通过 |
 | hc_split_sinkhorn | Ascend 910B2C | 0.6228 | 0.0820 | **7.81x** | 7.60 7.81 9.36 | 22.5% | ✅ 通过 |
 | hc_split_sinkhorn | Iluvatar BI-V150 | 1.3987 | 0.1676 | **8.35x** | 8.31 8.35 8.44 | 1.4% | ✅ 通过 |
 | hc_split_sinkhorn | Enflame S60 | 1.9386 | 0.3793 | **5.11x** | 4.72 5.11 5.34 | 12.1% | ✅ 通过 |
 | hc_split_sinkhorn | Hygon BW1000 | 1.8543 | 0.1853 | **10.01x** | 9.66 10.01 10.25 | 5.9% | ✅ 通过 |
+| hc_split_sinkhorn | MTT S4000 | 3.0769 | 0.1173 | **26.24x** | 26.24 | 0.0% | ✅ 通过 |
 
 昇腾数据取 3 轮**交替**执行的中位数（各轮 7.70 7.86 8.49，极差 10.1%），明细见 `results/npu-Ascend910B2C/`。

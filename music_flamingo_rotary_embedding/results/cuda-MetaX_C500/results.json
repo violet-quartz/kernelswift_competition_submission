@@ -2,31 +2,39 @@
   "chip": "cuda-MetaX_C500",
   "env": {
     "python": "3.10.10",
-    "platform": "Linux-5.15.0-58-generic-x86_64-with-glibc2.39",
-    "chip": "cuda:MetaX C500",
     "torch": "2.8.0+metax3.3.0.2",
-    "triton": "3.0.0"
+    "triton": "3.0.0 (厂商版, backends=['metax'])",
+    "platform": "Linux-x86_64",
+    "chip": "cuda:MetaX C500"
   },
   "bench_args": {
-    "chip": "auto",
-    "only": [
-      "music_flamingo_rotary_embedding"
-    ],
     "warmup": 200,
     "repeat": 500,
     "seed": 42,
     "atol": 0.01,
-    "rtol": 0.01
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "music_flamingo_rotary_embedding"
+    ]
   },
   "results": [
     {
       "name": "music_flamingo_rotary_embedding",
-      "wall_s": 12.4,
-      "raw_output": "PASS accuracy; v0=0.222310 ms, v1=0.112377 ms, speedup=1.978x\n\nSummary: 1 passed, 0 failed, 1 total.",
       "status": "pass",
-      "v0_ms": 0.22231,
-      "v1_ms": 0.112377,
-      "speedup": 1.978
+      "v0_ms": 0.235104,
+      "v1_ms": 0.110852,
+      "speedup": 2.102,
+      "reps": 3,
+      "speedup_runs": [
+        2.102,
+        2.102,
+        2.37
+      ],
+      "spread_pct": 12.7,
+      "wall_s": 35.7,
+      "raw_output": "PASS accuracy; v0=0.261064 ms, v1=0.110176 ms, speedup=2.370x"
     }
   ]
 }

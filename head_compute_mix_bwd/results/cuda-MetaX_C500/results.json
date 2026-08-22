@@ -2,31 +2,39 @@
   "chip": "cuda-MetaX_C500",
   "env": {
     "python": "3.10.10",
-    "platform": "Linux-5.15.0-58-generic-x86_64-with-glibc2.39",
-    "chip": "cuda:MetaX C500",
     "torch": "2.8.0+metax3.3.0.2",
-    "triton": "3.0.0"
+    "triton": "3.0.0 (厂商版, backends=['metax'])",
+    "platform": "Linux-x86_64",
+    "chip": "cuda:MetaX C500"
   },
   "bench_args": {
-    "chip": "auto",
-    "only": [
-      "head_compute_mix_bwd"
-    ],
     "warmup": 200,
     "repeat": 500,
     "seed": 42,
     "atol": 0.01,
-    "rtol": 0.01
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 3,
+    "only": [
+      "head_compute_mix_bwd"
+    ]
   },
   "results": [
     {
       "name": "head_compute_mix_bwd",
-      "wall_s": 12.3,
-      "raw_output": "PASS accuracy; v0=0.186859 ms, v1=0.118115 ms, speedup=1.582x\n\nSummary: 1 passed, 0 failed, 1 total.",
       "status": "pass",
-      "v0_ms": 0.186859,
-      "v1_ms": 0.118115,
-      "speedup": 1.582
+      "v0_ms": 0.238478,
+      "v1_ms": 0.128974,
+      "speedup": 1.848,
+      "reps": 3,
+      "speedup_runs": [
+        1.567,
+        1.848,
+        1.849
+      ],
+      "spread_pct": 15.3,
+      "wall_s": 35.7,
+      "raw_output": "PASS accuracy; v0=0.238478 ms, v1=0.128974 ms, speedup=1.849x"
     }
   ]
 }
