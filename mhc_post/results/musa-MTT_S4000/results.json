@@ -1,0 +1,38 @@
+{
+  "chip": "musa-MTT_S4000",
+  "env": {
+    "python": "3.10.8",
+    "torch": "2.2.0",
+    "triton": "3.6.0 (triton-musa, backends=['musa'])",
+    "platform": "Linux-x86_64",
+    "chip": "musa:MTT_S4000"
+  },
+  "bench_args": {
+    "warmup": 200,
+    "repeat": 500,
+    "seed": 42,
+    "atol": 0.01,
+    "rtol": 0.01,
+    "timeout_s": 1800,
+    "reps": 1,
+    "only": [
+      "mhc_post"
+    ]
+  },
+  "results": [
+    {
+      "name": "mhc_post",
+      "status": "pass",
+      "v0_ms": 6.015569,
+      "v1_ms": 0.590973,
+      "speedup": 10.179,
+      "reps": 1,
+      "speedup_runs": [
+        10.179
+      ],
+      "spread_pct": 0.0,
+      "wall_s": 14.9,
+      "raw_output": "PASS accuracy; v0=6.015569 ms, v1=0.590973 ms, speedup=10.179x"
+    }
+  ]
+}

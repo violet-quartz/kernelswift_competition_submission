@@ -17,6 +17,11 @@
 
 `bench/`、`env/`、`run.sh` 是所有算子共用的基础设施，不属于任何单独一题。
 
+
+📋 **[跨芯片适配情况 → CROSS_CHIP.md](CROSS_CHIP.md)** —— 六款国产芯片的完整实测矩阵、
+测量方法，以及摩尔线程侧三个厂商工具链缺陷的最小复现（规约静默算错、`tl.dot` 编译失败、
+评测脚本不识别 musa 设备）。
+
 ## 跨芯片加速比总览
 
 | 赛题 | 算子 | MetaX C500 | Ascend 910B2C | Iluvatar BI-V150 | Enflame S60 | Hygon BW1000 |
