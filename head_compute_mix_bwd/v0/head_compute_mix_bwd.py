@@ -42,7 +42,16 @@ def _ks_bootstrap():
     """
     import importlib
 
-    for _mod in ("torch_npu", "torch_mlu"):
+    # [KS-PORT] torch_musa 是后加的：摩尔线程实测确认，**不显式导入 torch_musa
+    # 的话 torch.musa 压根不存在**（getattr(torch, "musa") is None），
+    # auto_bench 的设备探测自然也就找不到加速器。
+    # ⚠ 但只加这一行还不够 —— auto_bench.py L213 的 _iter_accelerators() 只遍历
+    #   (gcu, cuda, npu, mlu)，musa 不在其中。MTT S4000 上实测：即使 torch.musa
+    #   可用，_iter_accelerators() 仍返回 []，_detect_target_device() 直接抛
+    #   "no accelerator device available"；而 sync_devices() 也会变成空操作。
+    #   这是**评测脚本侧的缺口**，需要赛方把 musa 加进那个列表；这里先把我们
+    #   这半边做对，等对面支持时立刻可用，且对其它卡零副作用。
+    for _mod in ("torch_npu", "torch_mlu", "torch_musa"):
         try:
             importlib.import_module(_mod)
         except ImportError:

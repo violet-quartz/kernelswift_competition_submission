@@ -167,10 +167,22 @@ def _default_num_warps():
 
     其余卡保持原样（返回 None = 不传，用后端默认值），沐曦的行为逐字不变。
     KS_NUM_WARPS 仍然覆盖本函数。
+
+    [KS-PORT] 摩尔线程也返回 1，但理由和燧原不同：那里是**能否编译**的问题。
+    MTT S4000 上 num_warps>1 时 Triton 用 @global_smem（external addrspace(3)
+    符号）做跨 warp 中转，取地址走 GOT，MTGPU 后端不会 select 这个 GOT load，
+    llc 直接崩。改成 1 后本题从编译失败变成 10.21x。
+
+    ⚠ **这个绕法只对本题成立，不要往其它题推广。** 本 kernel 主体是外积累加、
+    全程没有规约（见文件抬头），所以安全。而摩尔上 N>32 的规约在 num_warps=1 下会
+    **静默算错**：sum 在 N=128 得 1984（正确 8128）、max 在 N=512 得 127（正确 511）
+    —— 只规约一部分就返回。对依赖规约的题，这个绕法会把"编译失败"变成"结果错误"，
+    更危险，所以那些题宁可让它编译失败。
     """
     try:
         import triton
-        if "gcu" in triton.backends.backends:
+        b = triton.backends.backends
+        if "gcu" in b or "musa" in b:     # 燧原：性能最优；摩尔：编译必需
             return 1
     except Exception:
         pass
@@ -196,7 +208,16 @@ def _ks_bootstrap():
     """
     import importlib
 
-    for _mod in ("torch_npu", "torch_mlu"):
+    # [KS-PORT] torch_musa 是后加的：摩尔线程实测确认，**不显式导入 torch_musa
+    # 的话 torch.musa 压根不存在**（getattr(torch, "musa") is None），
+    # auto_bench 的设备探测自然也就找不到加速器。
+    # ⚠ 但只加这一行还不够 —— auto_bench.py L213 的 _iter_accelerators() 只遍历
+    #   (gcu, cuda, npu, mlu)，musa 不在其中。MTT S4000 上实测：即使 torch.musa
+    #   可用，_iter_accelerators() 仍返回 []，_detect_target_device() 直接抛
+    #   "no accelerator device available"；而 sync_devices() 也会变成空操作。
+    #   这是**评测脚本侧的缺口**，需要赛方把 musa 加进那个列表；这里先把我们
+    #   这半边做对，等对面支持时立刻可用，且对其它卡零副作用。
+    for _mod in ("torch_npu", "torch_mlu", "torch_musa"):
         try:
             importlib.import_module(_mod)
         except ImportError:
