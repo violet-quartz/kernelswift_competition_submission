@@ -1,5 +1,10 @@
 # KernelSwift 算子创新大赛
 
+本代码仓是 [KernelSwift算子优化挑战赛](https://deeplink.org.cn/kernelswift_competition)（2026年 8 月 1 日 — 2026年 8 月 31 日）
+Triton 算子优化赛道的提交代码。
+
+该赛道的任务是在指定的 10 款芯片（9款国内芯片，一款英伟达芯片）上对给定的 10 个 task 的算子进行优化，在通过正确性校验的基础上，加速比大者获胜。
+
 赛题与算子文件夹的对应关系。每个文件夹内有各自的 README，记录该题的实现说明和测试结果。
 
 | 赛题 | 赛题名 | 算子文件夹 |
@@ -41,15 +46,3 @@
 五块卡**全部 10/10 通过**。加粗 = 快于 v0。数据取 3 轮**交替**执行的中位数，
 逐轮值和极差见各题 README 与 `results/<芯片>/`。
 
-**沐曦那一列是早期单次测量**，没有逐轮数据，和其余四列不完全可比 ——
-那台机器目前离线，等恢复后按同样方式重测。
-
-四道题的 v1 在不同卡上走**不同的 `tl.constexpr` 分支**（`grouped_topk`、
-`flex_attention`、`mm_encoder_attention`、`head_compute_mix_bwd`），另有两道
-按后端选常量（`mhc_post`、`SPLADE_sparse_pooler` 的 `num_warps`）。开关按**能力**
-命名而不是芯片名，编译期折叠、实测运行时开销为零。由来和实测依据写在对应 v1 文件的
-`[KS-PORT]` 注释里。
-
-**海光 BW1000 是唯一十题全部快于 v0 的卡。** 两道 attention 题在其余卡上普遍吃亏，
-根源是 Inductor 会把 v0 直接降成厂商的 `_scaled_dot_product_flash_attention`，
-手写 Triton 的对手其实是厂商优化过的库；昇腾例外，那里的收益来自预计算因果掩码。
